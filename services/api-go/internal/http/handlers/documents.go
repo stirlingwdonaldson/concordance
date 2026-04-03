@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,6 +123,41 @@ func (h DocumentsHandler) ListPipelineJobs(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (h DocumentsHandler) ListConcordance(w http.ResponseWriter, r *http.Request) {
+	documentID := r.PathValue("documentId")
+	items, err := h.store.ListConcordance(r.Context(), documentID, documents.ConcordanceFilter{
+		Lemma:   strings.TrimSpace(r.URL.Query().Get("lemma")),
+		POS:     strings.TrimSpace(r.URL.Query().Get("pos")),
+		Section: strings.TrimSpace(r.URL.Query().Get("section")),
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to list concordance"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h DocumentsHandler) ListKWIC(w http.ResponseWriter, r *http.Request) {
+	documentID := r.PathValue("documentId")
+	limit := parseIntWithDefault(r.URL.Query().Get("limit"), 50)
+	offset := parseIntWithDefault(r.URL.Query().Get("offset"), 0)
+
+	items, err := h.store.ListKWIC(r.Context(), documentID, documents.KWICFilter{
+		Lemma:   strings.TrimSpace(r.URL.Query().Get("lemma")),
+		Page:    strings.TrimSpace(r.URL.Query().Get("page")),
+		Section: strings.TrimSpace(r.URL.Query().Get("section")),
+		Limit:   limit,
+		Offset:  offset,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to list kwic occurrences"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func (h DocumentsHandler) RetryDocument(w http.ResponseWriter, r *http.Request) {
 	documentID := r.PathValue("documentId")
 	doc, ok, err := h.store.Retry(r.Context(), documentID)
@@ -179,4 +215,18 @@ func detectFormat(fileName string) string {
 	}
 
 	return ext
+}
+
+func parseIntWithDefault(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+
+	return parsed
 }

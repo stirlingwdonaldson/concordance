@@ -42,6 +42,40 @@ type PipelineJob struct {
 	FinishedAt time.Time `json:"finishedAt"`
 }
 
+type ConcordanceFilter struct {
+	Lemma   string
+	POS     string
+	Section string
+}
+
+type ConcordanceTerm struct {
+	ID             int64  `json:"id"`
+	Lemma          string `json:"lemma"`
+	NormalizedForm string `json:"normalizedForm"`
+	TotalFreq      int    `json:"totalFreq"`
+	Hapax          bool   `json:"hapax"`
+}
+
+type KWICFilter struct {
+	Lemma   string
+	Page    string
+	Section string
+	Limit   int
+	Offset  int
+}
+
+type KWICOccurrence struct {
+	ID           int64  `json:"id"`
+	TermID       int64  `json:"termId"`
+	Lemma        string `json:"lemma"`
+	SentenceID   string `json:"sentenceId"`
+	LeftContext  string `json:"leftContext"`
+	Keyword      string `json:"keyword"`
+	RightContext string `json:"rightContext"`
+	SectionID    string `json:"sectionId,omitempty"`
+	PageRef      string `json:"pageRef,omitempty"`
+}
+
 type JobStage struct {
 	Name      string    `json:"name"`
 	StartedAt time.Time `json:"startedAt"`

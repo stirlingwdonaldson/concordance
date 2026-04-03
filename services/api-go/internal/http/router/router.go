@@ -22,6 +22,8 @@ func New(health handlers.HealthHandler, projects handlers.ProjectsHandler, docum
 	mux.HandleFunc("GET /api/documents/{documentId}/passages", documents.ListPassages)
 	mux.HandleFunc("GET /api/documents/{documentId}/sentences", documents.ListSentences)
 	mux.HandleFunc("GET /api/documents/{documentId}/pipeline-jobs", documents.ListPipelineJobs)
+	mux.HandleFunc("GET /api/documents/{documentId}/concordance", documents.ListConcordance)
+	mux.HandleFunc("GET /api/documents/{documentId}/kwic", documents.ListKWIC)
 	mux.HandleFunc("GET /ws/jobs", documents.StreamJobs)
 
 	return withRequestLog(withCORS(mux))

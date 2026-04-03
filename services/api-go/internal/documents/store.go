@@ -9,6 +9,8 @@ type Store interface {
 	ListPassages(ctx context.Context, documentID string) ([]Passage, error)
 	ListSentences(ctx context.Context, documentID, passageID string) ([]Sentence, error)
 	ListPipelineJobs(ctx context.Context, documentID string) ([]PipelineJob, error)
+	ListConcordance(ctx context.Context, documentID string, filter ConcordanceFilter) ([]ConcordanceTerm, error)
+	ListKWIC(ctx context.Context, documentID string, filter KWICFilter) ([]KWICOccurrence, error)
 	Retry(ctx context.Context, documentID string) (Document, bool, error)
 	RunPipeline(ctx context.Context, documentID string)
 }

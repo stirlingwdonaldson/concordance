@@ -74,6 +74,14 @@ func (s *MemoryStore) ListPipelineJobs(_ context.Context, _ string) ([]PipelineJ
 	return []PipelineJob{}, nil
 }
 
+func (s *MemoryStore) ListConcordance(_ context.Context, _ string, _ ConcordanceFilter) ([]ConcordanceTerm, error) {
+	return []ConcordanceTerm{}, nil
+}
+
+func (s *MemoryStore) ListKWIC(_ context.Context, _ string, _ KWICFilter) ([]KWICOccurrence, error) {
+	return []KWICOccurrence{}, nil
+}
+
 func (s *MemoryStore) Retry(_ context.Context, documentID string) (Document, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

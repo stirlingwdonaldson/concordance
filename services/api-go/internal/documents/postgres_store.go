@@ -19,6 +19,7 @@ var stageOrder = []string{
 	"ingest_parse",
 	"segment_structure",
 	"nlp_analyze",
+	"concordance_aggregate",
 	"finalize_ready",
 }
 
@@ -271,6 +272,120 @@ order by started_at asc
 	return jobs, nil
 }
 
+func (s *PostgresStore) ListConcordance(ctx context.Context, documentID string, filter ConcordanceFilter) ([]ConcordanceTerm, error) {
+	const query = `
+select id, lemma, normalized_form, total_freq, hapax
+from concordance_terms ct
+where ct.document_id = $1
+  and ($2 = '' or ct.lemma ilike '%' || $2 || '%')
+  and ($3 = '' or exists (
+    select 1
+    from tokens t
+    where t.document_id = ct.document_id
+      and t.lemma = ct.lemma
+      and coalesce(t.pos, '') = $3
+  ))
+  and ($4 = '' or exists (
+    select 1
+    from kwic_occurrences ko
+    where ko.term_id = ct.id
+      and ko.section_id::text = $4
+  ))
+order by total_freq desc, lemma asc
+`
+
+	rows, err := s.pool.Query(ctx, query, documentID, strings.TrimSpace(filter.Lemma), strings.TrimSpace(filter.POS), strings.TrimSpace(filter.Section))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]ConcordanceTerm, 0)
+	for rows.Next() {
+		var item ConcordanceTerm
+		if err := rows.Scan(&item.ID, &item.Lemma, &item.NormalizedForm, &item.TotalFreq, &item.Hapax); err != nil {
+			return nil, err
+		}
+
+		items = append(items, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return items, nil
+}
+
+func (s *PostgresStore) ListKWIC(ctx context.Context, documentID string, filter KWICFilter) ([]KWICOccurrence, error) {
+	const query = `
+select ko.id, ko.term_id, ct.lemma, ko.sentence_id, ko.left_context, ko.keyword, ko.right_context, coalesce(ko.section_id::text, ''), coalesce(ko.page_ref, '')
+from kwic_occurrences ko
+join concordance_terms ct on ct.id = ko.term_id
+where ko.document_id = $1
+  and ($2 = '' or ct.lemma ilike '%' || $2 || '%')
+  and ($3 = '' or coalesce(ko.page_ref, '') = $3)
+  and ($4 = '' or ko.section_id::text = $4)
+order by ko.id asc
+limit $5
+offset $6
+`
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	rows, err := s.pool.Query(
+		ctx,
+		query,
+		documentID,
+		strings.TrimSpace(filter.Lemma),
+		strings.TrimSpace(filter.Page),
+		strings.TrimSpace(filter.Section),
+		limit,
+		offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]KWICOccurrence, 0)
+	for rows.Next() {
+		var item KWICOccurrence
+		if err := rows.Scan(
+			&item.ID,
+			&item.TermID,
+			&item.Lemma,
+			&item.SentenceID,
+			&item.LeftContext,
+			&item.Keyword,
+			&item.RightContext,
+			&item.SectionID,
+			&item.PageRef,
+		); err != nil {
+			return nil, err
+		}
+
+		items = append(items, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return items, nil
+}
+
 func (s *PostgresStore) Retry(ctx context.Context, documentID string) (Document, bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -405,11 +520,27 @@ func (s *PostgresStore) runIngestionPipeline(ctx context.Context, document Docum
 	if err := s.markStage(ctx, document.ID, stageOrder[3], stageProgress(3)); err != nil {
 		return err
 	}
-	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[3], stageProgress(3), "finalizing document")
-	if err := s.recordStageJob(ctx, document.ID, stageOrder[3], "completed", "document ready", stageStart, time.Now().UTC()); err != nil {
+	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[3], stageProgress(3), "building concordance and kwic")
+	if err := s.aggregateConcordance(ctx, document.ID); err != nil {
+		failedAt := time.Now().UTC()
+		_ = s.recordStageJob(ctx, document.ID, stageOrder[3], "failed", err.Error(), stageStart, failedAt)
+		s.publishStageFailed(document.ID, document.ProjectID, stageOrder[3], stageProgress(3), err.Error(), stageStart, failedAt)
 		return err
 	}
-	s.publishStageCompleted(document.ID, document.ProjectID, stageOrder[3], stageProgress(3), "document ready", stageStart, time.Now().UTC())
+	if err := s.recordStageJob(ctx, document.ID, stageOrder[3], "completed", "built concordance and kwic", stageStart, time.Now().UTC()); err != nil {
+		return err
+	}
+	s.publishStageCompleted(document.ID, document.ProjectID, stageOrder[3], stageProgress(3), "built concordance and kwic", stageStart, time.Now().UTC())
+
+	stageStart = time.Now().UTC()
+	if err := s.markStage(ctx, document.ID, stageOrder[4], stageProgress(4)); err != nil {
+		return err
+	}
+	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[4], stageProgress(4), "finalizing document")
+	if err := s.recordStageJob(ctx, document.ID, stageOrder[4], "completed", "document ready", stageStart, time.Now().UTC()); err != nil {
+		return err
+	}
+	s.publishStageCompleted(document.ID, document.ProjectID, stageOrder[4], stageProgress(4), "document ready", stageStart, time.Now().UTC())
 
 	_, err = s.pool.Exec(ctx, `
 update documents
@@ -593,6 +724,85 @@ values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 `, documentID, token.GetSentenceId(), token.GetTokenIndex(), token.GetSurface(), token.GetLemma(), token.GetPos(), token.GetIsStopword(), token.GetIsPunct(), token.GetStartChar(), token.GetEndChar()); err != nil {
 			return err
 		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (s *PostgresStore) aggregateConcordance(ctx context.Context, documentID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `delete from concordance_terms where document_id = $1`, documentID); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, `
+with lemma_pos_counts as (
+  select
+    document_id,
+    lemma,
+    coalesce(nullif(pos, ''), 'UNK') as pos,
+    count(*)::int as pos_freq
+  from tokens
+  where document_id = $1
+    and not is_punct
+  group by document_id, lemma, coalesce(nullif(pos, ''), 'UNK')
+), lemma_totals as (
+  select
+    document_id,
+    lemma,
+    sum(pos_freq)::int as total_freq,
+    jsonb_object_agg(pos, pos_freq order by pos) as pos_distribution
+  from lemma_pos_counts
+  group by document_id, lemma
+)
+insert into concordance_terms (document_id, lemma, normalized_form, total_freq, hapax, pos_distribution, tf_stats)
+select
+  document_id,
+  lemma,
+  lower(lemma),
+  total_freq,
+  total_freq = 1,
+  pos_distribution,
+  jsonb_build_object('termFrequency', total_freq)
+from lemma_totals
+`, documentID); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, `
+insert into kwic_occurrences (document_id, term_id, sentence_id, left_context, keyword, right_context)
+select
+  t.document_id,
+  ct.id,
+  t.sentence_id,
+  right(substr(s.text, 1, greatest((t.start_char - coalesce(s.start_char, 0))::int, 0)), 50),
+  substr(
+    s.text,
+    greatest((t.start_char - coalesce(s.start_char, 0))::int + 1, 1),
+    greatest((t.end_char - t.start_char)::int, 1)
+  ),
+  left(
+    substr(
+      s.text,
+      greatest((t.end_char - coalesce(s.start_char, 0))::int + 1, 1)
+    ),
+    50
+  )
+from tokens t
+join sentences s on s.id = t.sentence_id
+join concordance_terms ct
+  on ct.document_id = t.document_id
+ and ct.lemma = t.lemma
+where t.document_id = $1
+  and not t.is_punct
+order by t.sentence_id, t.token_index
+`, documentID); err != nil {
+		return err
 	}
 
 	return tx.Commit(ctx)

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"concordance/services/api-go/internal/db"
 	"concordance/services/api-go/internal/documents"
 	"concordance/services/api-go/internal/http/handlers"
+	"concordance/services/api-go/internal/nlpv1"
 	"concordance/services/api-go/internal/projects"
 )
 
@@ -44,6 +46,48 @@ type sentenceResponse struct {
 type pipelineJobResponse struct {
 	Stage  string `json:"stage"`
 	Status string `json:"status"`
+}
+
+type concordanceResponse struct {
+	Lemma     string `json:"lemma"`
+	TotalFreq int    `json:"totalFreq"`
+}
+
+type kwicResponse struct {
+	Keyword string `json:"keyword"`
+}
+
+type stubNLPClient struct{}
+
+func (stubNLPClient) Health(_ context.Context) (*nlpv1.HealthResponse, error) {
+	return &nlpv1.HealthResponse{Status: "ready"}, nil
+}
+
+func (stubNLPClient) AnalyzeDocument(_ context.Context, req *nlpv1.AnalyzeDocumentRequest) (*nlpv1.AnalyzeDocumentResponse, error) {
+	tokens := make([]*nlpv1.Token, 0)
+	for _, passage := range req.Passages {
+		for _, sentence := range passage.Sentences {
+			parts := strings.Fields(sentence.Text)
+			if len(parts) == 0 {
+				continue
+			}
+			tokens = append(tokens, &nlpv1.Token{
+				SentenceId: sentence.SentenceId,
+				TokenIndex: 0,
+				Surface:    parts[0],
+				Lemma:      strings.ToLower(parts[0]),
+				Pos:        "X",
+				StartChar:  sentence.StartChar,
+				EndChar:    sentence.StartChar + int64(len(parts[0])),
+			})
+		}
+	}
+
+	return &nlpv1.AnalyzeDocumentResponse{Tokens: tokens}, nil
+}
+
+func (stubNLPClient) Close() error {
+	return nil
 }
 
 func TestProjectUploadStatusFlow(t *testing.T) {
@@ -75,7 +119,7 @@ func TestProjectUploadStatusFlow(t *testing.T) {
 	events := documents.NewJobEventBroker()
 	health := handlers.NewHealthHandler(config.Config{}, handlers.ReadinessChecks{Database: pool.Ping})
 	projectHandler := handlers.NewProjectsHandler(projects.NewPostgresStore(pool))
-	documentsHandler := handlers.NewDocumentsHandler(documents.NewPostgresStore(pool, events), uploadDir, events)
+	documentsHandler := handlers.NewDocumentsHandler(documents.NewPostgresStore(pool, events, stubNLPClient{}), uploadDir, events)
 
 	testServer := httptest.NewServer(New(health, projectHandler, documentsHandler))
 	defer testServer.Close()
@@ -105,6 +149,19 @@ func TestProjectUploadStatusFlow(t *testing.T) {
 	jobs := fetchPipelineJobs(t, testServer.URL, docID)
 	if len(jobs) == 0 {
 		t.Fatalf("expected persisted pipeline jobs")
+	}
+	if len(jobs) != 5 {
+		t.Fatalf("expected 5 pipeline jobs, got=%d", len(jobs))
+	}
+
+	concordance := fetchConcordance(t, testServer.URL, docID)
+	if len(concordance) == 0 {
+		t.Fatalf("expected concordance rows")
+	}
+
+	kwic := fetchKWIC(t, testServer.URL, docID)
+	if len(kwic) == 0 {
+		t.Fatalf("expected kwic rows")
 	}
 
 	retryDocument(t, testServer.URL, docID)
@@ -210,6 +267,48 @@ func fetchPipelineJobs(t *testing.T, baseURL, documentID string) []pipelineJobRe
 	var payload listResponse[pipelineJobResponse]
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode pipeline jobs response: %v", err)
+	}
+
+	return payload.Items
+}
+
+func fetchConcordance(t *testing.T, baseURL, documentID string) []concordanceResponse {
+	t.Helper()
+
+	resp, err := http.Get(baseURL + "/api/documents/" + documentID + "/concordance")
+	if err != nil {
+		t.Fatalf("concordance request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("concordance status code: got=%d", resp.StatusCode)
+	}
+
+	var payload listResponse[concordanceResponse]
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode concordance response: %v", err)
+	}
+
+	return payload.Items
+}
+
+func fetchKWIC(t *testing.T, baseURL, documentID string) []kwicResponse {
+	t.Helper()
+
+	resp, err := http.Get(baseURL + "/api/documents/" + documentID + "/kwic")
+	if err != nil {
+		t.Fatalf("kwic request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("kwic status code: got=%d", resp.StatusCode)
+	}
+
+	var payload listResponse[kwicResponse]
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode kwic response: %v", err)
 	}
 
 	return payload.Items

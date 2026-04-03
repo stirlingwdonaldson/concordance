@@ -173,7 +173,7 @@ func TestPostgresStoreRunPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list pipeline jobs: %v", err)
 	}
-	if len(jobs) != 4 {
+	if len(jobs) != 5 {
 		t.Fatalf("unexpected pipeline job count: got=%d", len(jobs))
 	}
 	if jobs[0].Stage != "ingest_parse" {
@@ -181,6 +181,9 @@ func TestPostgresStoreRunPipeline(t *testing.T) {
 	}
 	if jobs[2].Stage != "nlp_analyze" {
 		t.Fatalf("unexpected nlp stage: got=%s", jobs[2].Stage)
+	}
+	if jobs[3].Stage != "concordance_aggregate" {
+		t.Fatalf("unexpected concordance stage: got=%s", jobs[3].Stage)
 	}
 
 	var tokenCount int

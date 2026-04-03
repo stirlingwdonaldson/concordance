@@ -125,6 +125,34 @@ func TestListPipelineJobs(t *testing.T) {
 	}
 }
 
+func TestListConcordance(t *testing.T) {
+	events := documents.NewJobEventBroker()
+	h := NewDocumentsHandler(documents.NewMemoryStore(events), t.TempDir(), events)
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/d1/concordance?lemma=ishmael&pos=X", nil)
+	req.SetPathValue("documentId", "d1")
+	rr := httptest.NewRecorder()
+
+	h.ListConcordance(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got=%d", rr.Code)
+	}
+}
+
+func TestListKWIC(t *testing.T) {
+	events := documents.NewJobEventBroker()
+	h := NewDocumentsHandler(documents.NewMemoryStore(events), t.TempDir(), events)
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/d1/kwic?lemma=ishmael&limit=10&offset=5", nil)
+	req.SetPathValue("documentId", "d1")
+	rr := httptest.NewRecorder()
+
+	h.ListKWIC(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got=%d", rr.Code)
+	}
+}
+
 func TestRetryDocumentNotFound(t *testing.T) {
 	events := documents.NewJobEventBroker()
 	h := NewDocumentsHandler(documents.NewMemoryStore(events), t.TempDir(), events)

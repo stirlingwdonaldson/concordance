@@ -32,6 +32,24 @@ type PipelineJob = {
   finishedAt: string;
 };
 
+type ConcordanceTerm = {
+  id: number;
+  lemma: string;
+  normalizedForm: string;
+  totalFreq: number;
+  hapax: boolean;
+};
+
+type KWICOccurrence = {
+  id: number;
+  termId: number;
+  lemma: string;
+  sentenceId: string;
+  leftContext: string;
+  keyword: string;
+  rightContext: string;
+};
+
 type JobStreamEvent = {
   version: string;
   eventId: string;
@@ -88,6 +106,14 @@ export default function HomePage() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [selectedDocument, setSelectedDocument] = useState<string>("");
   const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([]);
+  const [concordanceTerms, setConcordanceTerms] = useState<ConcordanceTerm[]>(
+    [],
+  );
+  const [kwicRows, setKwicRows] = useState<KWICOccurrence[]>([]);
+  const [concordanceLemma, setConcordanceLemma] = useState("");
+  const [concordancePOS, setConcordancePOS] = useState("");
+  const [kwicLemma, setKWICLemma] = useState("");
+  const [kwicLimit, setKWICLimit] = useState("50");
   const [statusMessage, setStatusMessage] = useState("");
   const [streamState, setStreamState] = useState<StreamConnectionState>("idle");
   const [lastStreamEventAt, setLastStreamEventAt] = useState<number | null>(
@@ -122,10 +148,24 @@ export default function HomePage() {
   useEffect(() => {
     if (selectedDocument !== "") {
       void refreshPipelineJobs(selectedDocument);
+      void refreshConcordance(
+        selectedDocument,
+        concordanceLemma,
+        concordancePOS,
+      );
+      void refreshKWIC(selectedDocument, kwicLemma, kwicLimit);
     } else {
       setPipelineJobs([]);
+      setConcordanceTerms([]);
+      setKwicRows([]);
     }
-  }, [selectedDocument]);
+  }, [
+    concordanceLemma,
+    concordancePOS,
+    kwicLemma,
+    kwicLimit,
+    selectedDocument,
+  ]);
 
   useEffect(() => {
     if (lastStreamEventAt === null) {
@@ -201,6 +241,14 @@ export default function HomePage() {
         const progress = event.payload.progress;
         if (typeof status === "string" && typeof progress === "number") {
           updateDocumentStatus(status, progress);
+          if (status === "ready") {
+            void refreshConcordance(
+              documentId,
+              concordanceLemma,
+              concordancePOS,
+            );
+            void refreshKWIC(documentId, kwicLemma, kwicLimit);
+          }
         }
         return;
       }
@@ -214,6 +262,8 @@ export default function HomePage() {
         if (projectId !== "") {
           void refreshDocuments(projectId);
         }
+        void refreshConcordance(documentId, concordanceLemma, concordancePOS);
+        void refreshKWIC(documentId, kwicLemma, kwicLimit);
       }
     }
 
@@ -266,7 +316,15 @@ export default function HomePage() {
       }
       socket?.close();
     };
-  }, [selectedDocument, selectedProject, wsBase]);
+  }, [
+    concordanceLemma,
+    concordancePOS,
+    kwicLemma,
+    kwicLimit,
+    selectedDocument,
+    selectedProject,
+    wsBase,
+  ]);
 
   const streamStatusLabel =
     streamState === "idle"
@@ -368,6 +426,66 @@ export default function HomePage() {
       setPipelineJobs(payload.items);
     } catch (error) {
       handleRequestError("Unable to load pipeline jobs.", error);
+    }
+  }
+
+  async function refreshConcordance(
+    documentId: string,
+    lemma: string,
+    pos: string,
+  ) {
+    const query = new URLSearchParams();
+    if (lemma.trim() !== "") {
+      query.set("lemma", lemma.trim());
+    }
+    if (pos.trim() !== "") {
+      query.set("pos", pos.trim());
+    }
+
+    try {
+      const response = await fetch(
+        `${apiBase}/api/documents/${documentId}/concordance?${query.toString()}`,
+      );
+      if (!response.ok) {
+        setStatusMessage("Unable to load concordance.");
+        return;
+      }
+
+      const payload = (await response.json()) as { items: ConcordanceTerm[] };
+      setConcordanceTerms(payload.items);
+    } catch (error) {
+      handleRequestError("Unable to load concordance.", error);
+    }
+  }
+
+  async function refreshKWIC(
+    documentId: string,
+    lemma: string,
+    rawLimit: string,
+  ) {
+    const query = new URLSearchParams();
+    if (lemma.trim() !== "") {
+      query.set("lemma", lemma.trim());
+    }
+
+    const limit = Number.parseInt(rawLimit, 10);
+    if (!Number.isNaN(limit) && limit > 0) {
+      query.set("limit", String(limit));
+    }
+
+    try {
+      const response = await fetch(
+        `${apiBase}/api/documents/${documentId}/kwic?${query.toString()}`,
+      );
+      if (!response.ok) {
+        setStatusMessage("Unable to load KWIC occurrences.");
+        return;
+      }
+
+      const payload = (await response.json()) as { items: KWICOccurrence[] };
+      setKwicRows(payload.items);
+    } catch (error) {
+      handleRequestError("Unable to load KWIC occurrences.", error);
     }
   }
 
@@ -581,6 +699,108 @@ export default function HomePage() {
                 }
               >
                 <strong>{job.stage}</strong> - {job.status} - {job.message}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="panel">
+        <h2>Concordance</h2>
+        <div className="row">
+          <input
+            value={concordanceLemma}
+            onChange={(event) => setConcordanceLemma(event.target.value)}
+            placeholder="Filter by lemma"
+            disabled={selectedDocument === ""}
+          />
+          <input
+            value={concordancePOS}
+            onChange={(event) => setConcordancePOS(event.target.value)}
+            placeholder="Filter by POS"
+            disabled={selectedDocument === ""}
+          />
+          <button
+            type="button"
+            disabled={selectedDocument === ""}
+            onClick={() => {
+              if (selectedDocument !== "") {
+                void refreshConcordance(
+                  selectedDocument,
+                  concordanceLemma,
+                  concordancePOS,
+                );
+              }
+            }}
+          >
+            Apply filters
+          </button>
+        </div>
+        {concordanceTerms.length === 0 ? (
+          <p>No concordance terms yet.</p>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Lemma</th>
+                  <th>Normalized</th>
+                  <th>Freq</th>
+                  <th>Hapax</th>
+                </tr>
+              </thead>
+              <tbody>
+                {concordanceTerms.map((term) => (
+                  <tr key={term.id}>
+                    <td>{term.lemma}</td>
+                    <td>{term.normalizedForm}</td>
+                    <td>{term.totalFreq}</td>
+                    <td>{term.hapax ? "Yes" : "No"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
+        <h2>KWIC explorer</h2>
+        <div className="row">
+          <input
+            value={kwicLemma}
+            onChange={(event) => setKWICLemma(event.target.value)}
+            placeholder="Filter by lemma"
+            disabled={selectedDocument === ""}
+          />
+          <input
+            value={kwicLimit}
+            onChange={(event) => setKWICLimit(event.target.value)}
+            placeholder="Limit"
+            inputMode="numeric"
+            disabled={selectedDocument === ""}
+          />
+          <button
+            type="button"
+            disabled={selectedDocument === ""}
+            onClick={() => {
+              if (selectedDocument !== "") {
+                void refreshKWIC(selectedDocument, kwicLemma, kwicLimit);
+              }
+            }}
+          >
+            Run query
+          </button>
+        </div>
+        {kwicRows.length === 0 ? (
+          <p>No KWIC rows yet.</p>
+        ) : (
+          <ul className="kwic-list">
+            {kwicRows.map((row) => (
+              <li key={row.id}>
+                <span className="kwic-left">{row.leftContext}</span>
+                <strong className="kwic-keyword">{row.keyword}</strong>
+                <span className="kwic-right">{row.rightContext}</span>
               </li>
             ))}
           </ul>
