@@ -8,10 +8,12 @@ import (
 	"concordance/services/api-go/internal/http/handlers"
 )
 
-func New(health handlers.HealthHandler) http.Handler {
+func New(health handlers.HealthHandler, projects handlers.ProjectsHandler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health.GetHealth)
 	mux.HandleFunc("GET /ready", health.GetReady)
+	mux.HandleFunc("GET /api/projects", projects.ListProjects)
+	mux.HandleFunc("POST /api/projects", projects.CreateProject)
 
 	return withRequestLog(mux)
 }

@@ -13,12 +13,15 @@ import (
 	"concordance/services/api-go/internal/config"
 	"concordance/services/api-go/internal/http/handlers"
 	"concordance/services/api-go/internal/http/router"
+	"concordance/services/api-go/internal/projects"
 )
 
 func main() {
 	cfg := config.Load()
 	health := handlers.NewHealthHandler(cfg)
-	h := router.New(health)
+	projectStore := projects.NewMemoryStore()
+	projectHandlers := handlers.NewProjectsHandler(projectStore)
+	h := router.New(health, projectHandlers)
 
 	server := http.Server{
 		Addr:              cfg.Addr(),
