@@ -19,6 +19,7 @@ func New(health handlers.HealthHandler, projects handlers.ProjectsHandler, docum
 	mux.HandleFunc("GET /api/documents/{documentId}/status", documents.GetDocumentStatus)
 	mux.HandleFunc("GET /api/documents/{documentId}/passages", documents.ListPassages)
 	mux.HandleFunc("GET /api/documents/{documentId}/sentences", documents.ListSentences)
+	mux.HandleFunc("GET /api/documents/{documentId}/pipeline-jobs", documents.ListPipelineJobs)
 
 	return withRequestLog(mux)
 }

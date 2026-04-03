@@ -69,6 +69,10 @@ func (s *MemoryStore) ListSentences(_ context.Context, _, _ string) ([]Sentence,
 	return []Sentence{}, nil
 }
 
+func (s *MemoryStore) ListPipelineJobs(_ context.Context, _ string) ([]PipelineJob, error) {
+	return []PipelineJob{}, nil
+}
+
 func (s *MemoryStore) RunPipeline(ctx context.Context, documentID string) {
 	for idx, stageName := range stageOrder {
 		select {

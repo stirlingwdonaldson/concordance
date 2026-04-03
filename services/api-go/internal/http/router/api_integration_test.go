@@ -41,6 +41,11 @@ type sentenceResponse struct {
 	ID string `json:"id"`
 }
 
+type pipelineJobResponse struct {
+	Stage  string `json:"stage"`
+	Status string `json:"status"`
+}
+
 func TestProjectUploadStatusFlow(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -94,6 +99,11 @@ func TestProjectUploadStatusFlow(t *testing.T) {
 	sentences := fetchSentences(t, testServer.URL, docID)
 	if len(sentences) == 0 {
 		t.Fatalf("expected persisted sentences")
+	}
+
+	jobs := fetchPipelineJobs(t, testServer.URL, docID)
+	if len(jobs) == 0 {
+		t.Fatalf("expected persisted pipeline jobs")
 	}
 
 	matches, err := filepath.Glob(filepath.Join(uploadDir, "*.txt"))
@@ -168,6 +178,27 @@ func fetchSentences(t *testing.T, baseURL, documentID string) []sentenceResponse
 	var payload listResponse[sentenceResponse]
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode sentences response: %v", err)
+	}
+
+	return payload.Items
+}
+
+func fetchPipelineJobs(t *testing.T, baseURL, documentID string) []pipelineJobResponse {
+	t.Helper()
+
+	resp, err := http.Get(baseURL + "/api/documents/" + documentID + "/pipeline-jobs")
+	if err != nil {
+		t.Fatalf("pipeline jobs request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("pipeline jobs status code: got=%d", resp.StatusCode)
+	}
+
+	var payload listResponse[pipelineJobResponse]
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode pipeline jobs response: %v", err)
 	}
 
 	return payload.Items

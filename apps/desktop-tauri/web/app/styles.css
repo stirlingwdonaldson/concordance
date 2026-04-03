@@ -104,6 +104,22 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.timeline {
+  list-style: none;
+  padding: 0;
+}
+
+.timeline-item {
+  border-left: 3px solid #af9572;
+  padding: 0.35rem 0.6rem;
+  background: #fffaf2;
+}
+
+.timeline-item.failed {
+  border-left-color: #af4935;
+  background: #fff2ef;
+}
+
 @media (max-width: 640px) {
   .page {
     margin-top: 1rem;

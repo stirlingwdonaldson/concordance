@@ -8,5 +8,6 @@ type Store interface {
 	ListByProject(ctx context.Context, projectID string) ([]Document, error)
 	ListPassages(ctx context.Context, documentID string) ([]Passage, error)
 	ListSentences(ctx context.Context, documentID, passageID string) ([]Sentence, error)
+	ListPipelineJobs(ctx context.Context, documentID string) ([]PipelineJob, error)
 	RunPipeline(ctx context.Context, documentID string)
 }

@@ -33,6 +33,15 @@ type Sentence struct {
 	EndChar       int64  `json:"endChar"`
 }
 
+type PipelineJob struct {
+	ID         string    `json:"id"`
+	Stage      string    `json:"stage"`
+	Status     string    `json:"status"`
+	Message    string    `json:"message"`
+	StartedAt  time.Time `json:"startedAt"`
+	FinishedAt time.Time `json:"finishedAt"`
+}
+
 type JobStage struct {
 	Name      string    `json:"name"`
 	StartedAt time.Time `json:"startedAt"`

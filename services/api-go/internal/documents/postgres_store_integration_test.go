@@ -169,11 +169,14 @@ func TestPostgresStoreRunPipeline(t *testing.T) {
 		t.Fatalf("expected at least 3 sentences, got=%d", len(sentences))
 	}
 
-	var stageCount int
-	if err := pool.QueryRow(ctx, "select count(*) from pipeline_jobs where document_id = $1", doc.ID).Scan(&stageCount); err != nil {
-		t.Fatalf("count pipeline jobs: %v", err)
+	jobs, err := store.ListPipelineJobs(ctx, doc.ID)
+	if err != nil {
+		t.Fatalf("list pipeline jobs: %v", err)
 	}
-	if stageCount != 3 {
-		t.Fatalf("unexpected pipeline job count: got=%d", stageCount)
+	if len(jobs) != 3 {
+		t.Fatalf("unexpected pipeline job count: got=%d", len(jobs))
+	}
+	if jobs[0].Stage != "ingest_parse" {
+		t.Fatalf("unexpected first stage: got=%s", jobs[0].Stage)
 	}
 }

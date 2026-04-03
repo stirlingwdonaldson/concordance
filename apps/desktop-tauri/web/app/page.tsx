@@ -23,6 +23,15 @@ type Document = {
   progress: number;
 };
 
+type PipelineJob = {
+  id: string;
+  stage: string;
+  status: string;
+  message: string;
+  startedAt: string;
+  finishedAt: string;
+};
+
 const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8080";
 
 export default function HomePage() {
@@ -31,6 +40,8 @@ export default function HomePage() {
   const [projectName, setProjectName] = useState("Sample Project");
   const [selectedProject, setSelectedProject] = useState<string>("");
   const [documents, setDocuments] = useState<Document[]>([]);
+  const [selectedDocument, setSelectedDocument] = useState<string>("");
+  const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
 
   const selectedProjectExists = useMemo(
@@ -48,6 +59,14 @@ export default function HomePage() {
       void refreshDocuments(selectedProject);
     }
   }, [selectedProject]);
+
+  useEffect(() => {
+    if (selectedDocument !== "") {
+      void refreshPipelineJobs(selectedDocument);
+    } else {
+      setPipelineJobs([]);
+    }
+  }, [selectedDocument]);
 
   async function refreshHealth() {
     const response = await fetch(`${apiBase}/ready`);
@@ -86,6 +105,33 @@ export default function HomePage() {
 
     const payload = (await response.json()) as { items: Document[] };
     setDocuments(payload.items);
+
+    if (payload.items.length === 0) {
+      setSelectedDocument("");
+      return;
+    }
+
+    setSelectedDocument((current) => {
+      const exists = payload.items.some((document) => document.id === current);
+      if (exists) {
+        return current;
+      }
+
+      return payload.items[0].id;
+    });
+  }
+
+  async function refreshPipelineJobs(documentId: string) {
+    const response = await fetch(
+      `${apiBase}/api/documents/${documentId}/pipeline-jobs`,
+    );
+    if (!response.ok) {
+      setStatusMessage("Unable to load pipeline jobs.");
+      return;
+    }
+
+    const payload = (await response.json()) as { items: PipelineJob[] };
+    setPipelineJobs(payload.items);
   }
 
   async function createProject() {
@@ -191,10 +237,31 @@ export default function HomePage() {
         <button
           type="button"
           disabled={!selectedProjectExists}
-          onClick={() => void refreshDocuments(selectedProject)}
+          onClick={() => {
+            void refreshDocuments(selectedProject);
+            if (selectedDocument !== "") {
+              void refreshPipelineJobs(selectedDocument);
+            }
+          }}
         >
           Refresh status
         </button>
+
+        <select
+          value={selectedDocument}
+          onChange={(event) => setSelectedDocument(event.target.value)}
+          disabled={documents.length === 0}
+        >
+          {documents.length === 0 ? (
+            <option value="">No documents yet</option>
+          ) : (
+            documents.map((document) => (
+              <option key={document.id} value={document.id}>
+                {document.fileName}
+              </option>
+            ))
+          )}
+        </select>
 
         <ul>
           {documents.map((document) => (
@@ -204,6 +271,28 @@ export default function HomePage() {
             </li>
           ))}
         </ul>
+      </section>
+
+      <section className="panel">
+        <h2>Pipeline timeline</h2>
+        {pipelineJobs.length === 0 ? (
+          <p>No pipeline jobs recorded for the selected document yet.</p>
+        ) : (
+          <ul className="timeline">
+            {pipelineJobs.map((job) => (
+              <li
+                key={job.id}
+                className={
+                  job.status === "failed"
+                    ? "timeline-item failed"
+                    : "timeline-item"
+                }
+              >
+                <strong>{job.stage}</strong> - {job.status} - {job.message}
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       {statusMessage ? (

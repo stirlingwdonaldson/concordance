@@ -223,6 +223,44 @@ where passages.document_id = $1
 	return items, nil
 }
 
+func (s *PostgresStore) ListPipelineJobs(ctx context.Context, documentID string) ([]PipelineJob, error) {
+	const query = `
+select id, stage, status, coalesce(message, ''), started_at, finished_at
+from pipeline_jobs
+where document_id = $1
+order by started_at asc
+`
+
+	rows, err := s.pool.Query(ctx, query, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	jobs := make([]PipelineJob, 0)
+	for rows.Next() {
+		var job PipelineJob
+		if err := rows.Scan(
+			&job.ID,
+			&job.Stage,
+			&job.Status,
+			&job.Message,
+			&job.StartedAt,
+			&job.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+
+		jobs = append(jobs, job)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return jobs, nil
+}
+
 func (s *PostgresStore) RunPipeline(ctx context.Context, documentID string) {
 	document, ok := s.Get(ctx, documentID)
 	if !ok {

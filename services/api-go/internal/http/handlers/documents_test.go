@@ -106,3 +106,16 @@ func TestListSentences(t *testing.T) {
 		t.Fatalf("unexpected status: got=%d", rr.Code)
 	}
 }
+
+func TestListPipelineJobs(t *testing.T) {
+	h := NewDocumentsHandler(documents.NewMemoryStore(), t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/d1/pipeline-jobs", nil)
+	req.SetPathValue("documentId", "d1")
+	rr := httptest.NewRecorder()
+
+	h.ListPipelineJobs(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got=%d", rr.Code)
+	}
+}

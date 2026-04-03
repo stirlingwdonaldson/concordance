@@ -110,6 +110,17 @@ func (h DocumentsHandler) ListSentences(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (h DocumentsHandler) ListPipelineJobs(w http.ResponseWriter, r *http.Request) {
+	documentID := r.PathValue("documentId")
+	items, err := h.store.ListPipelineJobs(r.Context(), documentID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to list pipeline jobs"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func saveUploadFile(uploadDir, fileName string, reader io.Reader) (string, string, error) {
 	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
 		return "", "", err
