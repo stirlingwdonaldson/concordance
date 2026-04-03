@@ -3,6 +3,7 @@ package projects
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"concordance/services/api-go/internal/db"
@@ -21,7 +22,8 @@ func TestPostgresStoreCreateAndList(t *testing.T) {
 	}
 	defer pool.Close()
 
-	if err := db.RunMigrations(ctx, pool, "migrations"); err != nil {
+	migrationsDir := filepath.Join("..", "..", "migrations")
+	if err := db.RunMigrations(ctx, pool, migrationsDir); err != nil {
 		t.Fatalf("run migrations: %v", err)
 	}
 

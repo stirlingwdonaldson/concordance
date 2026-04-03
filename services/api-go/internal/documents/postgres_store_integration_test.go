@@ -3,6 +3,7 @@ package documents
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -23,7 +24,8 @@ func TestPostgresStoreCreateGetAndList(t *testing.T) {
 	}
 	defer pool.Close()
 
-	if err := db.RunMigrations(ctx, pool, "migrations"); err != nil {
+	migrationsDir := filepath.Join("..", "..", "migrations")
+	if err := db.RunMigrations(ctx, pool, migrationsDir); err != nil {
 		t.Fatalf("run migrations: %v", err)
 	}
 
@@ -83,7 +85,8 @@ func TestPostgresStoreRunPipeline(t *testing.T) {
 	}
 	defer pool.Close()
 
-	if err := db.RunMigrations(ctx, pool, "migrations"); err != nil {
+	migrationsDir := filepath.Join("..", "..", "migrations")
+	if err := db.RunMigrations(ctx, pool, migrationsDir); err != nil {
 		t.Fatalf("run migrations: %v", err)
 	}
 
