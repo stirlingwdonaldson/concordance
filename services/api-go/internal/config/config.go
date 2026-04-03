@@ -11,6 +11,8 @@ type Config struct {
 	EmbeddingModel  string
 	EmbeddingDim    int
 	UploadDir       string
+	DatabaseURL     string
+	MigrationsDir   string
 }
 
 func Load() Config {
@@ -25,6 +27,8 @@ func Load() Config {
 		EmbeddingModel:  envOrDefault("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
 		EmbeddingDim:    384,
 		UploadDir:       envOrDefault("UPLOAD_DIR", ".concordance-data/uploads"),
+		DatabaseURL:     os.Getenv("DATABASE_URL"),
+		MigrationsDir:   envOrDefault("MIGRATIONS_DIR", "migrations"),
 	}
 }
 

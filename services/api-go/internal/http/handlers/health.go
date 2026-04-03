@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -8,7 +9,12 @@ import (
 )
 
 type HealthHandler struct {
-	cfg config.Config
+	cfg      config.Config
+	checkers ReadinessChecks
+}
+
+type ReadinessChecks struct {
+	Database func(ctx context.Context) error
 }
 
 type HealthResponse struct {
@@ -19,8 +25,8 @@ type HealthResponse struct {
 	EmbeddingDim    int    `json:"embeddingDim"`
 }
 
-func NewHealthHandler(cfg config.Config) HealthHandler {
-	return HealthHandler{cfg: cfg}
+func NewHealthHandler(cfg config.Config, checks ReadinessChecks) HealthHandler {
+	return HealthHandler{cfg: cfg, checkers: checks}
 }
 
 func (h HealthHandler) GetHealth(w http.ResponseWriter, _ *http.Request) {
@@ -35,12 +41,21 @@ func (h HealthHandler) GetHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (h HealthHandler) GetReady(w http.ResponseWriter, _ *http.Request) {
+func (h HealthHandler) GetReady(w http.ResponseWriter, r *http.Request) {
+	databaseStatus := "ready"
+	readyStatus := "ready"
+	if h.checkers.Database != nil {
+		if err := h.checkers.Database(r.Context()); err != nil {
+			databaseStatus = "failed"
+			readyStatus = "degraded"
+		}
+	}
+
 	resp := map[string]any{
 		"service": "api-go",
-		"status":  "ready",
+		"status":  readyStatus,
 		"checks": map[string]string{
-			"database":    "pending",
+			"database":    databaseStatus,
 			"nlp_sidecar": "pending",
 		},
 	}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +15,7 @@ func TestGetHealth(t *testing.T) {
 		PipelineVersion: "v-test",
 		EmbeddingModel:  "all-MiniLM-L6-v2",
 		EmbeddingDim:    384,
-	})
+	}, ReadinessChecks{})
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rr := httptest.NewRecorder()
@@ -35,5 +36,30 @@ func TestGetHealth(t *testing.T) {
 
 	if resp.EmbeddingModel != "all-MiniLM-L6-v2" {
 		t.Fatalf("unexpected embedding model: got=%s", resp.EmbeddingModel)
+	}
+}
+
+func TestGetReadyDatabaseFailed(t *testing.T) {
+	h := NewHealthHandler(config.Config{}, ReadinessChecks{
+		Database: func(_ context.Context) error {
+			return context.DeadlineExceeded
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	rr := httptest.NewRecorder()
+	h.GetReady(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got=%d", rr.Code)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("invalid response payload: %v", err)
+	}
+
+	if payload["status"] != "degraded" {
+		t.Fatalf("unexpected readiness status: got=%v", payload["status"])
 	}
 }

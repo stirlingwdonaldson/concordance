@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"concordance/services/api-go/internal/config"
+	"concordance/services/api-go/internal/db"
 	"concordance/services/api-go/internal/documents"
 	"concordance/services/api-go/internal/http/handlers"
 	"concordance/services/api-go/internal/http/router"
@@ -19,7 +20,19 @@ import (
 
 func main() {
 	cfg := config.Load()
-	health := handlers.NewHealthHandler(cfg)
+	dbPool, err := db.Connect(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("database startup failed: %v", err)
+	}
+	defer dbPool.Close()
+
+	if err := db.RunMigrations(context.Background(), dbPool, cfg.MigrationsDir); err != nil {
+		log.Fatalf("migration startup failed: %v", err)
+	}
+
+	health := handlers.NewHealthHandler(cfg, handlers.ReadinessChecks{
+		Database: dbPool.Ping,
+	})
 	projectStore := projects.NewMemoryStore()
 	projectHandlers := handlers.NewProjectsHandler(projectStore)
 	documentStore := documents.NewMemoryStore()
