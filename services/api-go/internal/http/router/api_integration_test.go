@@ -1,0 +1,182 @@
+package router
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"concordance/services/api-go/internal/config"
+	"concordance/services/api-go/internal/db"
+	"concordance/services/api-go/internal/documents"
+	"concordance/services/api-go/internal/http/handlers"
+	"concordance/services/api-go/internal/projects"
+)
+
+type projectResponse struct {
+	ID string `json:"id"`
+}
+
+type documentResponse struct {
+	ID       string  `json:"id"`
+	Status   string  `json:"status"`
+	Progress float64 `json:"progress"`
+}
+
+func TestProjectUploadStatusFlow(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+
+	ctx := context.Background()
+	pool, err := db.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect database: %v", err)
+	}
+	defer pool.Close()
+
+	if err := db.RunMigrations(ctx, pool, "migrations"); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, "delete from documents"); err != nil {
+		t.Fatalf("reset documents table: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "delete from projects"); err != nil {
+		t.Fatalf("reset projects table: %v", err)
+	}
+
+	uploadDir := t.TempDir()
+	health := handlers.NewHealthHandler(config.Config{}, handlers.ReadinessChecks{Database: pool.Ping})
+	projectHandler := handlers.NewProjectsHandler(projects.NewPostgresStore(pool))
+	documentsHandler := handlers.NewDocumentsHandler(documents.NewPostgresStore(pool), uploadDir)
+
+	testServer := httptest.NewServer(New(health, projectHandler, documentsHandler))
+	defer testServer.Close()
+
+	projectID := createProject(t, testServer.URL)
+	docID := uploadDocument(t, testServer.URL, projectID)
+
+	status := waitForDocumentReady(t, testServer.URL, docID)
+	if status.Status != "ready" {
+		t.Fatalf("unexpected final document status: got=%s", status.Status)
+	}
+
+	if status.Progress != 1 {
+		t.Fatalf("unexpected final document progress: got=%v", status.Progress)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(uploadDir, "*.txt"))
+	if err != nil {
+		t.Fatalf("glob uploaded files: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected one uploaded file, got=%d", len(matches))
+	}
+}
+
+func createProject(t *testing.T, baseURL string) string {
+	t.Helper()
+
+	body := []byte(`{"name":"Integration Suite"}`)
+	resp, err := http.Post(baseURL+"/api/projects", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("create project request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create project status: got=%d", resp.StatusCode)
+	}
+
+	var payload projectResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode create project response: %v", err)
+	}
+
+	if payload.ID == "" {
+		t.Fatalf("expected created project id")
+	}
+
+	return payload.ID
+}
+
+func uploadDocument(t *testing.T, baseURL, projectID string) string {
+	t.Helper()
+
+	form := new(bytes.Buffer)
+	writer := multipart.NewWriter(form)
+	part, err := writer.CreateFormFile("file", "sample.txt")
+	if err != nil {
+		t.Fatalf("create multipart file: %v", err)
+	}
+	_, _ = part.Write([]byte("Call me Ishmael."))
+	_ = writer.Close()
+
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/projects/"+projectID+"/documents/upload", form)
+	if err != nil {
+		t.Fatalf("build upload request: %v", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("upload request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("upload status: got=%d", resp.StatusCode)
+	}
+
+	var payload documentResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode upload response: %v", err)
+	}
+
+	if payload.ID == "" {
+		t.Fatalf("expected created document id")
+	}
+
+	return payload.ID
+}
+
+func waitForDocumentReady(t *testing.T, baseURL, documentID string) documentResponse {
+	t.Helper()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(baseURL + "/api/documents/" + documentID + "/status")
+		if err != nil {
+			t.Fatalf("status request failed: %v", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			t.Fatalf("status request code: got=%d", resp.StatusCode)
+		}
+
+		var payload documentResponse
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			resp.Body.Close()
+			t.Fatalf("decode status response: %v", err)
+		}
+		resp.Body.Close()
+
+		if payload.Status == "ready" {
+			return payload
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	t.Fatalf("document did not reach ready state before timeout")
+	return documentResponse{}
+}
