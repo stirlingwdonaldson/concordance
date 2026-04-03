@@ -1,3 +1,5 @@
+SHELL := /bin/bash
+
 GO_SERVICE := services/api-go
 PY_SERVICE := services/nlp-python
 WEB_APP := apps/desktop-tauri/web
@@ -33,3 +35,33 @@ dev-db-down:
 .PHONY: run-api
 run-api:
 	cd $(GO_SERVICE) && go run ./cmd/api
+
+.PHONY: run-web
+run-web:
+	cd $(WEB_APP) && bun run dev
+
+.PHONY: run-dev
+run-dev:
+	@set -euo pipefail; \
+	ENV_FILE=".env"; \
+	if [[ ! -f "$$ENV_FILE" ]]; then ENV_FILE=".env.example"; fi; \
+	echo "Using $$ENV_FILE"; \
+	set -a; . "$$ENV_FILE"; set +a; \
+	docker compose -f $(DOCKER_COMPOSE) up -d; \
+	cleanup() { \
+		echo "Stopping local services..."; \
+		if [[ -n "$${API_PID:-}" ]] && kill -0 $$API_PID 2>/dev/null; then kill $$API_PID; fi; \
+		if [[ -n "$${WEB_PID:-}" ]] && kill -0 $$WEB_PID 2>/dev/null; then kill $$WEB_PID; fi; \
+		wait $${API_PID:-} 2>/dev/null || true; \
+		wait $${WEB_PID:-} 2>/dev/null || true; \
+		docker compose -f $(DOCKER_COMPOSE) down; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	( cd $(GO_SERVICE) && go run ./cmd/api ) & API_PID=$$!; \
+	( cd $(WEB_APP) && bun run dev ) & WEB_PID=$$!; \
+	echo "API PID=$$API_PID, WEB PID=$$WEB_PID"; \
+	while true; do \
+		if ! kill -0 $$API_PID 2>/dev/null; then break; fi; \
+		if ! kill -0 $$WEB_PID 2>/dev/null; then break; fi; \
+		sleep 1; \
+	done
