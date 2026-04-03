@@ -38,7 +38,7 @@ run-api:
 
 .PHONY: run-web
 run-web:
-	cd $(WEB_APP) && bun run dev
+	cd $(WEB_APP) && NODE_OPTIONS= bun run dev
 
 .PHONY: run-dev
 run-dev:
@@ -58,7 +58,7 @@ run-dev:
 	}; \
 	trap cleanup EXIT INT TERM; \
 	( cd $(GO_SERVICE) && go run ./cmd/api ) & API_PID=$$!; \
-	( cd $(WEB_APP) && bun run dev ) & WEB_PID=$$!; \
+	( cd $(WEB_APP) && NODE_OPTIONS= bun run dev ) & WEB_PID=$$!; \
 	echo "API PID=$$API_PID, WEB PID=$$WEB_PID"; \
 	while true; do \
 		if ! kill -0 $$API_PID 2>/dev/null; then break; fi; \
