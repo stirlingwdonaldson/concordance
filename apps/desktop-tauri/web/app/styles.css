@@ -69,6 +69,41 @@ ul {
   gap: 0.4rem;
 }
 
+.row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+input,
+select,
+button {
+  font: inherit;
+}
+
+input,
+select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  background: #fff;
+}
+
+button {
+  border: 1px solid #8f744d;
+  background: linear-gradient(180deg, #e4c39a 0%, #d7ae7e 100%);
+  border-radius: 8px;
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 @media (max-width: 640px) {
   .page {
     margin-top: 1rem;

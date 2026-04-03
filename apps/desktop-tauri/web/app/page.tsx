@@ -1,30 +1,214 @@
-const checks = [
-  "Go API health endpoint",
-  "Project listing endpoint",
-  "Upload pipeline status endpoint",
-  "Python sidecar health endpoint",
-];
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import type { ChangeEvent } from "react";
+
+type Health = {
+  status: string;
+  checks?: {
+    database?: string;
+    nlp_sidecar?: string;
+  };
+};
+
+type Project = {
+  id: string;
+  name: string;
+};
+
+type Document = {
+  id: string;
+  fileName: string;
+  status: string;
+  progress: number;
+};
+
+const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8080";
 
 export default function HomePage() {
+  const [health, setHealth] = useState<Health | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectName, setProjectName] = useState("Sample Project");
+  const [selectedProject, setSelectedProject] = useState<string>("");
+  const [documents, setDocuments] = useState<Document[]>([]);
+  const [statusMessage, setStatusMessage] = useState("");
+
+  const selectedProjectExists = useMemo(
+    () => projects.some((project) => project.id === selectedProject),
+    [projects, selectedProject],
+  );
+
+  useEffect(() => {
+    void refreshHealth();
+    void refreshProjects();
+  }, []);
+
+  useEffect(() => {
+    if (selectedProject !== "") {
+      void refreshDocuments(selectedProject);
+    }
+  }, [selectedProject]);
+
+  async function refreshHealth() {
+    const response = await fetch(`${apiBase}/ready`);
+    if (!response.ok) {
+      setStatusMessage("Unable to load health state.");
+      return;
+    }
+
+    const payload = (await response.json()) as Health;
+    setHealth(payload);
+  }
+
+  async function refreshProjects() {
+    const response = await fetch(`${apiBase}/api/projects`);
+    if (!response.ok) {
+      setStatusMessage("Unable to load projects.");
+      return;
+    }
+
+    const payload = (await response.json()) as { items: Project[] };
+    setProjects(payload.items);
+
+    if (payload.items.length > 0) {
+      setSelectedProject((current) => current || payload.items[0].id);
+    }
+  }
+
+  async function refreshDocuments(projectId: string) {
+    const response = await fetch(
+      `${apiBase}/api/projects/${projectId}/documents`,
+    );
+    if (!response.ok) {
+      setStatusMessage("Unable to load documents.");
+      return;
+    }
+
+    const payload = (await response.json()) as { items: Document[] };
+    setDocuments(payload.items);
+  }
+
+  async function createProject() {
+    const response = await fetch(`${apiBase}/api/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: projectName }),
+    });
+
+    if (!response.ok) {
+      setStatusMessage("Unable to create project.");
+      return;
+    }
+
+    setStatusMessage("Project created.");
+    await refreshProjects();
+  }
+
+  async function onUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file || selectedProject === "") {
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const response = await fetch(
+      `${apiBase}/api/projects/${selectedProject}/documents/upload`,
+      {
+        method: "POST",
+        body: formData,
+      },
+    );
+
+    if (!response.ok) {
+      setStatusMessage("Upload failed.");
+      return;
+    }
+
+    setStatusMessage("Upload accepted. Refreshing status.");
+    await refreshDocuments(selectedProject);
+    window.setTimeout(() => {
+      void refreshDocuments(selectedProject);
+    }, 800);
+  }
+
   return (
     <main className="page">
       <section className="hero">
         <p className="eyebrow">Concordance Desktop</p>
         <h1>Literary analysis workspace</h1>
         <p className="subtitle">
-          Foundation build with health checks and pipeline skeleton ready for
-          iterative delivery.
+          API-connected foundation with project creation and upload pipeline
+          status.
         </p>
       </section>
 
       <section className="panel">
-        <h2>Current implementation slice</h2>
+        <h2>System readiness</h2>
+        <p>
+          Overall: <strong>{health?.status ?? "loading"}</strong>
+        </p>
+        <p>Database: {health?.checks?.database ?? "unknown"}</p>
+        <p>NLP sidecar: {health?.checks?.nlp_sidecar ?? "unknown"}</p>
+      </section>
+
+      <section className="panel">
+        <h2>Projects</h2>
+        <div className="row">
+          <input
+            value={projectName}
+            onChange={(event) => setProjectName(event.target.value)}
+            placeholder="Project name"
+          />
+          <button type="button" onClick={createProject}>
+            Create
+          </button>
+          <button type="button" onClick={() => void refreshProjects()}>
+            Refresh
+          </button>
+        </div>
+
+        <select
+          value={selectedProject}
+          onChange={(event) => setSelectedProject(event.target.value)}
+        >
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>
+              {project.name}
+            </option>
+          ))}
+        </select>
+      </section>
+
+      <section className="panel">
+        <h2>Document uploads</h2>
+        <input
+          type="file"
+          onChange={(event) => void onUpload(event)}
+          disabled={!selectedProjectExists}
+        />
+        <button
+          type="button"
+          disabled={!selectedProjectExists}
+          onClick={() => void refreshDocuments(selectedProject)}
+        >
+          Refresh status
+        </button>
+
         <ul>
-          {checks.map((item) => (
-            <li key={item}>{item}</li>
+          {documents.map((document) => (
+            <li key={document.id}>
+              {document.fileName} - {document.status} (
+              {Math.round(document.progress * 100)}%)
+            </li>
           ))}
         </ul>
       </section>
+
+      {statusMessage ? (
+        <section className="panel">{statusMessage}</section>
+      ) : null}
     </main>
   );
 }
