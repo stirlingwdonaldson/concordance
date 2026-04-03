@@ -123,6 +123,10 @@ button:disabled {
 .stream-state {
   margin: 0 0 0.8rem;
   color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: baseline;
 }
 
 .stream-state strong {
@@ -136,6 +140,18 @@ button:disabled {
 .stream-state.reconnecting strong,
 .stream-state.connecting strong {
   color: #a56b22;
+}
+
+.stream-state.stale strong {
+  color: #af4935;
+}
+
+.stream-state.stale .stream-last-event {
+  color: #af4935;
+}
+
+.stream-last-event {
+  font-size: 0.92rem;
 }
 
 @media (max-width: 640px) {

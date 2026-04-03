@@ -54,6 +54,21 @@ type StreamConnectionState =
   | "connected"
   | "reconnecting";
 
+function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) {
+    return `${seconds}s ago`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ago`;
+}
+
 const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8080";
 
 function toWebSocketBase(rawBase: string): string {
@@ -75,6 +90,10 @@ export default function HomePage() {
   const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
   const [streamState, setStreamState] = useState<StreamConnectionState>("idle");
+  const [lastStreamEventAt, setLastStreamEventAt] = useState<number | null>(
+    null,
+  );
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const wsBase = useMemo(() => toWebSocketBase(apiBase), []);
 
   const selectedProjectExists = useMemo(
@@ -109,8 +128,23 @@ export default function HomePage() {
   }, [selectedDocument]);
 
   useEffect(() => {
+    if (lastStreamEventAt === null) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [lastStreamEventAt]);
+
+  useEffect(() => {
     if (selectedDocument === "") {
       setStreamState("idle");
+      setLastStreamEventAt(null);
       return;
     }
 
@@ -137,6 +171,8 @@ export default function HomePage() {
       } catch {
         return;
       }
+
+      setLastStreamEventAt(Date.now());
 
       if (event.eventType === "snapshot") {
         const payloadDocument = event.payload.document as
@@ -240,6 +276,16 @@ export default function HomePage() {
         : streamState === "connected"
           ? "Live"
           : "Reconnecting";
+
+  const lastEventLabel =
+    lastStreamEventAt === null
+      ? "No events yet"
+      : `${new Date(lastStreamEventAt).toLocaleTimeString()} (${formatElapsed(nowMs - lastStreamEventAt)})`;
+
+  const isStreamStale =
+    streamState === "connected" &&
+    lastStreamEventAt !== null &&
+    nowMs - lastStreamEventAt > 30000;
 
   async function refreshHealth() {
     try {
@@ -506,8 +552,13 @@ export default function HomePage() {
 
       <section className="panel">
         <h2>Pipeline timeline</h2>
-        <p className={`stream-state ${streamState}`}>
+        <p
+          className={`stream-state ${streamState} ${isStreamStale ? "stale" : ""}`}
+        >
           Stream: <strong>{streamStatusLabel}</strong>
+          <span className="stream-last-event">
+            Last event: {lastEventLabel}
+          </span>
         </p>
         <button
           type="button"
