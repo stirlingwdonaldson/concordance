@@ -58,3 +58,16 @@ func TestUploadDocument(t *testing.T) {
 		t.Fatalf("expected pipeline to begin processing")
 	}
 }
+
+func TestGetDocumentStatusNotFound(t *testing.T) {
+	h := NewDocumentsHandler(documents.NewMemoryStore(), t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/missing/status", nil)
+	req.SetPathValue("documentId", "missing")
+	rr := httptest.NewRecorder()
+
+	h.GetDocumentStatus(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("unexpected status: got=%d", rr.Code)
+	}
+}
