@@ -4,6 +4,7 @@ GO_SERVICE := services/api-go
 PY_SERVICE := services/nlp-python
 WEB_APP := apps/desktop-tauri/web
 DOCKER_COMPOSE := infra/docker/docker-compose.dev.yml
+NEXT_LOCALSTORAGE_FILE := .concordance-data/next-localstorage.json
 
 .PHONY: test-go
 test-go:
@@ -38,7 +39,9 @@ run-api:
 
 .PHONY: run-web
 run-web:
-	cd $(WEB_APP) && NODE_OPTIONS= bun run dev
+	mkdir -p .concordance-data
+	touch $(NEXT_LOCALSTORAGE_FILE)
+	cd $(WEB_APP) && NODE_OPTIONS="--localstorage-file=$(abspath $(NEXT_LOCALSTORAGE_FILE))" bun run dev
 
 .PHONY: run-dev
 run-dev:
@@ -48,6 +51,8 @@ run-dev:
 	echo "Using $$ENV_FILE"; \
 	set -a; . "$$ENV_FILE"; set +a; \
 	docker compose -f $(DOCKER_COMPOSE) up -d; \
+	mkdir -p .concordance-data; \
+	touch $(NEXT_LOCALSTORAGE_FILE); \
 	cleanup() { \
 		echo "Stopping local services..."; \
 		if [[ -n "$${API_PID:-}" ]] && kill -0 $$API_PID 2>/dev/null; then kill $$API_PID; fi; \
@@ -58,7 +63,7 @@ run-dev:
 	}; \
 	trap cleanup EXIT INT TERM; \
 	( cd $(GO_SERVICE) && go run ./cmd/api ) & API_PID=$$!; \
-	( cd $(WEB_APP) && NODE_OPTIONS= bun run dev ) & WEB_PID=$$!; \
+	( cd $(WEB_APP) && NODE_OPTIONS="--localstorage-file=$(abspath $(NEXT_LOCALSTORAGE_FILE))" bun run dev ) & WEB_PID=$$!; \
 	echo "API PID=$$API_PID, WEB PID=$$WEB_PID"; \
 	while true; do \
 		if ! kill -0 $$API_PID 2>/dev/null; then break; fi; \
