@@ -386,6 +386,33 @@ offset $6
 	return items, nil
 }
 
+func (s *PostgresStore) CountKWIC(ctx context.Context, documentID string, filter KWICFilter) (int, error) {
+	const query = `
+select count(*)
+from kwic_occurrences ko
+join concordance_terms ct on ct.id = ko.term_id
+where ko.document_id = $1
+  and ($2 = '' or ct.lemma ilike '%' || $2 || '%')
+  and ($3 = '' or coalesce(ko.page_ref, '') = $3)
+  and ($4 = '' or ko.section_id::text = $4)
+`
+
+	var total int
+	err := s.pool.QueryRow(
+		ctx,
+		query,
+		documentID,
+		strings.TrimSpace(filter.Lemma),
+		strings.TrimSpace(filter.Page),
+		strings.TrimSpace(filter.Section),
+	).Scan(&total)
+	if err != nil {
+		return 0, err
+	}
+
+	return total, nil
+}
+
 func (s *PostgresStore) Retry(ctx context.Context, documentID string) (Document, bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

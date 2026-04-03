@@ -16,6 +16,13 @@ import (
 	"concordance/services/api-go/internal/documents"
 )
 
+type kwicListPayload struct {
+	Items  []documents.KWICOccurrence `json:"items"`
+	Total  int                        `json:"total"`
+	Limit  int                        `json:"limit"`
+	Offset int                        `json:"offset"`
+}
+
 func TestUploadDocument(t *testing.T) {
 	dir := t.TempDir()
 	events := documents.NewJobEventBroker()
@@ -150,6 +157,47 @@ func TestListKWIC(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("unexpected status: got=%d", rr.Code)
+	}
+
+	var payload kwicListPayload
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+
+	if payload.Total != 0 {
+		t.Fatalf("expected total=0, got=%d", payload.Total)
+	}
+	if payload.Limit != 10 {
+		t.Fatalf("expected limit=10, got=%d", payload.Limit)
+	}
+	if payload.Offset != 5 {
+		t.Fatalf("expected offset=5, got=%d", payload.Offset)
+	}
+}
+
+func TestListKWICClampsInvalidPaging(t *testing.T) {
+	events := documents.NewJobEventBroker()
+	h := NewDocumentsHandler(documents.NewMemoryStore(events), t.TempDir(), events)
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/d1/kwic?limit=-1&offset=-2", nil)
+	req.SetPathValue("documentId", "d1")
+	rr := httptest.NewRecorder()
+
+	h.ListKWIC(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got=%d", rr.Code)
+	}
+
+	var payload kwicListPayload
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+
+	if payload.Limit != 50 {
+		t.Fatalf("expected clamped limit=50, got=%d", payload.Limit)
+	}
+	if payload.Offset != 0 {
+		t.Fatalf("expected clamped offset=0, got=%d", payload.Offset)
 	}
 }
 

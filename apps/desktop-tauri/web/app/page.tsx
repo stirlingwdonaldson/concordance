@@ -50,6 +50,13 @@ type KWICOccurrence = {
   rightContext: string;
 };
 
+type KWICListPayload = {
+  items: KWICOccurrence[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 type JobStreamEvent = {
   version: string;
   eventId: string;
@@ -110,6 +117,8 @@ export default function HomePage() {
     [],
   );
   const [kwicRows, setKwicRows] = useState<KWICOccurrence[]>([]);
+  const [kwicTotal, setKWICTotal] = useState(0);
+  const [kwicOffset, setKWICOffset] = useState(0);
   const [concordanceLemma, setConcordanceLemma] = useState("");
   const [concordancePOS, setConcordancePOS] = useState("");
   const [kwicLemma, setKWICLemma] = useState("");
@@ -158,6 +167,8 @@ export default function HomePage() {
       setPipelineJobs([]);
       setConcordanceTerms([]);
       setKwicRows([]);
+      setKWICTotal(0);
+      setKWICOffset(0);
     }
   }, [
     concordanceLemma,
@@ -462,6 +473,7 @@ export default function HomePage() {
     documentId: string,
     lemma: string,
     rawLimit: string,
+    rawOffset?: number,
   ) {
     const query = new URLSearchParams();
     if (lemma.trim() !== "") {
@@ -473,6 +485,9 @@ export default function HomePage() {
       query.set("limit", String(limit));
     }
 
+    const offset = rawOffset ?? kwicOffset;
+    query.set("offset", String(Math.max(0, offset)));
+
     try {
       const response = await fetch(
         `${apiBase}/api/documents/${documentId}/kwic?${query.toString()}`,
@@ -482,12 +497,20 @@ export default function HomePage() {
         return;
       }
 
-      const payload = (await response.json()) as { items: KWICOccurrence[] };
+      const payload = (await response.json()) as KWICListPayload;
       setKwicRows(payload.items);
+      setKWICTotal(payload.total);
+      setKWICOffset(payload.offset);
     } catch (error) {
       handleRequestError("Unable to load KWIC occurrences.", error);
     }
   }
+
+  const kwicPageSize = Math.max(1, Number.parseInt(kwicLimit, 10) || 50);
+  const kwicFrom = kwicRows.length === 0 ? 0 : kwicOffset + 1;
+  const kwicTo = kwicOffset + kwicRows.length;
+  const canGoPrev = kwicOffset > 0;
+  const canGoNext = kwicOffset + kwicRows.length < kwicTotal;
 
   async function createProject() {
     try {
@@ -785,13 +808,51 @@ export default function HomePage() {
             disabled={selectedDocument === ""}
             onClick={() => {
               if (selectedDocument !== "") {
-                void refreshKWIC(selectedDocument, kwicLemma, kwicLimit);
+                setKWICOffset(0);
+                void refreshKWIC(selectedDocument, kwicLemma, kwicLimit, 0);
               }
             }}
           >
             Run query
           </button>
+          <button
+            type="button"
+            disabled={selectedDocument === "" || !canGoPrev}
+            onClick={() => {
+              if (selectedDocument !== "") {
+                const nextOffset = Math.max(0, kwicOffset - kwicPageSize);
+                void refreshKWIC(
+                  selectedDocument,
+                  kwicLemma,
+                  kwicLimit,
+                  nextOffset,
+                );
+              }
+            }}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            disabled={selectedDocument === "" || !canGoNext}
+            onClick={() => {
+              if (selectedDocument !== "") {
+                const nextOffset = kwicOffset + kwicPageSize;
+                void refreshKWIC(
+                  selectedDocument,
+                  kwicLemma,
+                  kwicLimit,
+                  nextOffset,
+                );
+              }
+            }}
+          >
+            Next
+          </button>
         </div>
+        <p className="kwic-meta">
+          Showing {kwicFrom}-{kwicTo} of {kwicTotal}
+        </p>
         {kwicRows.length === 0 ? (
           <p>No KWIC rows yet.</p>
         ) : (

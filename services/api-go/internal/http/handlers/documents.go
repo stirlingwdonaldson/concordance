@@ -142,20 +142,34 @@ func (h DocumentsHandler) ListKWIC(w http.ResponseWriter, r *http.Request) {
 	documentID := r.PathValue("documentId")
 	limit := parseIntWithDefault(r.URL.Query().Get("limit"), 50)
 	offset := parseIntWithDefault(r.URL.Query().Get("offset"), 0)
+	limit, offset = normalizeKWICPage(limit, offset)
 
-	items, err := h.store.ListKWIC(r.Context(), documentID, documents.KWICFilter{
+	filter := documents.KWICFilter{
 		Lemma:   strings.TrimSpace(r.URL.Query().Get("lemma")),
 		Page:    strings.TrimSpace(r.URL.Query().Get("page")),
 		Section: strings.TrimSpace(r.URL.Query().Get("section")),
 		Limit:   limit,
 		Offset:  offset,
-	})
+	}
+
+	total, err := h.store.CountKWIC(r.Context(), documentID, filter)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to count kwic occurrences"})
+		return
+	}
+
+	items, err := h.store.ListKWIC(r.Context(), documentID, filter)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to list kwic occurrences"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":  items,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
 }
 
 func (h DocumentsHandler) RetryDocument(w http.ResponseWriter, r *http.Request) {
@@ -229,4 +243,18 @@ func parseIntWithDefault(raw string, fallback int) int {
 	}
 
 	return parsed
+}
+
+func normalizeKWICPage(limit, offset int) (int, int) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	return limit, offset
 }

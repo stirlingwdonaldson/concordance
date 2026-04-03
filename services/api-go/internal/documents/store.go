@@ -11,6 +11,7 @@ type Store interface {
 	ListPipelineJobs(ctx context.Context, documentID string) ([]PipelineJob, error)
 	ListConcordance(ctx context.Context, documentID string, filter ConcordanceFilter) ([]ConcordanceTerm, error)
 	ListKWIC(ctx context.Context, documentID string, filter KWICFilter) ([]KWICOccurrence, error)
+	CountKWIC(ctx context.Context, documentID string, filter KWICFilter) (int, error)
 	Retry(ctx context.Context, documentID string) (Document, bool, error)
 	RunPipeline(ctx context.Context, documentID string)
 }

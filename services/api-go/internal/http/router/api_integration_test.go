@@ -57,6 +57,13 @@ type kwicResponse struct {
 	Keyword string `json:"keyword"`
 }
 
+type kwicListResponse struct {
+	Items  []kwicResponse `json:"items"`
+	Total  int            `json:"total"`
+	Limit  int            `json:"limit"`
+	Offset int            `json:"offset"`
+}
+
 type stubNLPClient struct{}
 
 func (stubNLPClient) Health(_ context.Context) (*nlpv1.HealthResponse, error) {
@@ -160,8 +167,11 @@ func TestProjectUploadStatusFlow(t *testing.T) {
 	}
 
 	kwic := fetchKWIC(t, testServer.URL, docID)
-	if len(kwic) == 0 {
+	if len(kwic.Items) == 0 {
 		t.Fatalf("expected kwic rows")
+	}
+	if kwic.Total < len(kwic.Items) {
+		t.Fatalf("expected kwic total >= items, got total=%d items=%d", kwic.Total, len(kwic.Items))
 	}
 
 	retryDocument(t, testServer.URL, docID)
@@ -293,10 +303,10 @@ func fetchConcordance(t *testing.T, baseURL, documentID string) []concordanceRes
 	return payload.Items
 }
 
-func fetchKWIC(t *testing.T, baseURL, documentID string) []kwicResponse {
+func fetchKWIC(t *testing.T, baseURL, documentID string) kwicListResponse {
 	t.Helper()
 
-	resp, err := http.Get(baseURL + "/api/documents/" + documentID + "/kwic")
+	resp, err := http.Get(baseURL + "/api/documents/" + documentID + "/kwic?limit=5&offset=0")
 	if err != nil {
 		t.Fatalf("kwic request failed: %v", err)
 	}
@@ -306,12 +316,18 @@ func fetchKWIC(t *testing.T, baseURL, documentID string) []kwicResponse {
 		t.Fatalf("kwic status code: got=%d", resp.StatusCode)
 	}
 
-	var payload listResponse[kwicResponse]
+	var payload kwicListResponse
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode kwic response: %v", err)
 	}
+	if payload.Limit != 5 {
+		t.Fatalf("expected kwic limit=5, got=%d", payload.Limit)
+	}
+	if payload.Offset != 0 {
+		t.Fatalf("expected kwic offset=0, got=%d", payload.Offset)
+	}
 
-	return payload.Items
+	return payload
 }
 
 func retryDocument(t *testing.T, baseURL, documentID string) {
