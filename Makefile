@@ -6,6 +6,10 @@ WEB_APP := apps/desktop-tauri/web
 test-go:
 	cd $(GO_SERVICE) && go test ./...
 
+.PHONY: test-go-integration
+test-go-integration:
+	cd $(GO_SERVICE) && TEST_DATABASE_URL=$$TEST_DATABASE_URL go test ./... -run PostgresStore
+
 .PHONY: check-py
 check-py:
 	python3 -m py_compile $(PY_SERVICE)/server/*.py $(PY_SERVICE)/pipelines/*.py

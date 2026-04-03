@@ -35,7 +35,7 @@ func main() {
 	})
 	projectStore := projects.NewPostgresStore(dbPool)
 	projectHandlers := handlers.NewProjectsHandler(projectStore)
-	documentStore := documents.NewMemoryStore()
+	documentStore := documents.NewPostgresStore(dbPool)
 	documentHandlers := handlers.NewDocumentsHandler(documentStore, cfg.UploadDir)
 	h := router.New(health, projectHandlers, documentHandlers)
 

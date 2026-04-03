@@ -8,14 +8,6 @@ import (
 	"time"
 )
 
-var stages = []string{
-	"ingest_parse",
-	"segment_structure",
-	"nlp_analyze",
-	"concordance_aggregate",
-	"finalize_ready",
-}
-
 type MemoryStore struct {
 	mu        sync.RWMutex
 	documents map[string]Document
@@ -25,17 +17,19 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{documents: make(map[string]Document)}
 }
 
-func (s *MemoryStore) Create(_ context.Context, projectID, fileName, localPath string) (Document, error) {
+func (s *MemoryStore) Create(_ context.Context, input CreateInput) (Document, error) {
 	now := time.Now().UTC()
 	doc := Document{
-		ID:        randomID(),
-		ProjectID: projectID,
-		FileName:  fileName,
-		LocalPath: localPath,
-		Status:    "queued",
-		Progress:  0,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:         randomID(),
+		ProjectID:  input.ProjectID,
+		FileName:   input.FileName,
+		LocalPath:  input.LocalPath,
+		SourceHash: input.SourceHash,
+		Format:     input.Format,
+		Status:     "queued",
+		Progress:   0,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 
 	s.mu.Lock()

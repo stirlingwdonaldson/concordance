@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,7 +46,15 @@ func TestUploadDocument(t *testing.T) {
 		t.Fatalf("unable to parse payload: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(dir, "sample.txt")); err != nil {
+	if !strings.HasPrefix(doc.LocalPath, dir) {
+		t.Fatalf("expected local path under upload dir: got=%s", doc.LocalPath)
+	}
+
+	if filepath.Ext(doc.LocalPath) != ".txt" {
+		t.Fatalf("expected txt extension in local path: got=%s", doc.LocalPath)
+	}
+
+	if _, err := os.Stat(doc.LocalPath); err != nil {
 		t.Fatalf("expected uploaded file to exist: %v", err)
 	}
 

@@ -2,11 +2,14 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"concordance/services/api-go/internal/documents"
 )
@@ -39,13 +42,19 @@ func (h DocumentsHandler) UploadDocument(w http.ResponseWriter, r *http.Request)
 	}
 	defer file.Close()
 
-	localPath, err := saveUploadFile(h.uploadDir, header.Filename, file)
+	localPath, sourceHash, err := saveUploadFile(h.uploadDir, header.Filename, file)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to save upload"})
 		return
 	}
 
-	doc, err := h.store.Create(r.Context(), projectID, header.Filename, localPath)
+	doc, err := h.store.Create(r.Context(), documents.CreateInput{
+		ProjectID:  projectID,
+		FileName:   header.Filename,
+		LocalPath:  localPath,
+		SourceHash: sourceHash,
+		Format:     detectFormat(header.Filename),
+	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to register document"})
 		return
@@ -78,21 +87,44 @@ func (h DocumentsHandler) ListProjectDocuments(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-func saveUploadFile(uploadDir, fileName string, reader io.Reader) (string, error) {
+func saveUploadFile(uploadDir, fileName string, reader io.Reader) (string, string, error) {
 	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	targetPath := filepath.Join(uploadDir, filepath.Base(fileName))
+	targetPath := uniqueUploadPath(uploadDir, fileName)
 	output, err := os.Create(targetPath)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer output.Close()
 
-	if _, err := io.Copy(output, reader); err != nil {
-		return "", err
+	hasher := sha256.New()
+	tee := io.TeeReader(reader, hasher)
+	if _, err := io.Copy(output, tee); err != nil {
+		return "", "", err
 	}
 
-	return targetPath, nil
+	return targetPath, hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func uniqueUploadPath(uploadDir, fileName string) string {
+	base := filepath.Base(fileName)
+	ext := filepath.Ext(base)
+	name := strings.TrimSuffix(base, ext)
+	if name == "" {
+		name = "document"
+	}
+
+	stamp := time.Now().UTC().Format("20060102T150405.000000000")
+	return filepath.Join(uploadDir, name+"-"+stamp+ext)
+}
+
+func detectFormat(fileName string) string {
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(fileName), "."))
+	if ext == "" {
+		return "txt"
+	}
+
+	return ext
 }
