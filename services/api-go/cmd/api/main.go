@@ -33,7 +33,7 @@ func main() {
 	health := handlers.NewHealthHandler(cfg, handlers.ReadinessChecks{
 		Database: dbPool.Ping,
 	})
-	projectStore := projects.NewMemoryStore()
+	projectStore := projects.NewPostgresStore(dbPool)
 	projectHandlers := handlers.NewProjectsHandler(projectStore)
 	documentStore := documents.NewMemoryStore()
 	documentHandlers := handlers.NewDocumentsHandler(documentStore, cfg.UploadDir)
