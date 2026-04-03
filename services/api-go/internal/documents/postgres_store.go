@@ -261,6 +261,67 @@ order by started_at asc
 	return jobs, nil
 }
 
+func (s *PostgresStore) Retry(ctx context.Context, documentID string) (Document, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Document{}, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+delete from pipeline_jobs where document_id = $1
+`, documentID); err != nil {
+		return Document{}, false, err
+	}
+
+	if _, err := tx.Exec(ctx, `
+delete from sentences
+where passage_id in (select id from passages where document_id = $1)
+`, documentID); err != nil {
+		return Document{}, false, err
+	}
+
+	if _, err := tx.Exec(ctx, `delete from passages where document_id = $1`, documentID); err != nil {
+		return Document{}, false, err
+	}
+
+	const updateQuery = `
+update documents
+set ingest_status = 'queued',
+    progress = 0,
+    ingest_error = null,
+    updated_at = now()
+where id = $1
+returning id, project_id, source_path, source_hash, format, title, ingest_status, progress, created_at, updated_at
+`
+
+	var doc Document
+	err = tx.QueryRow(ctx, updateQuery, documentID).Scan(
+		&doc.ID,
+		&doc.ProjectID,
+		&doc.LocalPath,
+		&doc.SourceHash,
+		&doc.Format,
+		&doc.FileName,
+		&doc.Status,
+		&doc.Progress,
+		&doc.CreatedAt,
+		&doc.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Document{}, false, nil
+	}
+	if err != nil {
+		return Document{}, false, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Document{}, false, err
+	}
+
+	return doc, true, nil
+}
+
 func (s *PostgresStore) RunPipeline(ctx context.Context, documentID string) {
 	document, ok := s.Get(ctx, documentID)
 	if !ok {

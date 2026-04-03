@@ -121,6 +121,23 @@ func (h DocumentsHandler) ListPipelineJobs(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (h DocumentsHandler) RetryDocument(w http.ResponseWriter, r *http.Request) {
+	documentID := r.PathValue("documentId")
+	doc, ok, err := h.store.Retry(r.Context(), documentID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to queue retry"})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "document not found"})
+		return
+	}
+
+	go h.store.RunPipeline(context.Background(), doc.ID)
+
+	writeJSON(w, http.StatusAccepted, doc)
+}
+
 func saveUploadFile(uploadDir, fileName string, reader io.Reader) (string, string, error) {
 	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
 		return "", "", err

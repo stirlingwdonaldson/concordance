@@ -212,6 +212,38 @@ export default function HomePage() {
     }
   }
 
+  async function retrySelectedDocument() {
+    if (selectedDocument === "") {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${apiBase}/api/documents/${selectedDocument}/retry`,
+        { method: "POST" },
+      );
+
+      if (!response.ok) {
+        setStatusMessage("Retry failed.");
+        return;
+      }
+
+      setStatusMessage("Retry queued. Refreshing timeline.");
+      if (selectedProject !== "") {
+        await refreshDocuments(selectedProject);
+      }
+      await refreshPipelineJobs(selectedDocument);
+      window.setTimeout(() => {
+        if (selectedProject !== "") {
+          void refreshDocuments(selectedProject);
+        }
+        void refreshPipelineJobs(selectedDocument);
+      }, 800);
+    } catch (error) {
+      handleRequestError("Retry failed.", error);
+    }
+  }
+
   return (
     <main className="page">
       <section className="hero">
@@ -308,6 +340,13 @@ export default function HomePage() {
 
       <section className="panel">
         <h2>Pipeline timeline</h2>
+        <button
+          type="button"
+          disabled={selectedDocument === ""}
+          onClick={() => void retrySelectedDocument()}
+        >
+          Retry ingestion
+        </button>
         {pipelineJobs.length === 0 ? (
           <p>No pipeline jobs recorded for the selected document yet.</p>
         ) : (

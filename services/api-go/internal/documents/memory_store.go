@@ -73,6 +73,23 @@ func (s *MemoryStore) ListPipelineJobs(_ context.Context, _ string) ([]PipelineJ
 	return []PipelineJob{}, nil
 }
 
+func (s *MemoryStore) Retry(_ context.Context, documentID string) (Document, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	doc, ok := s.documents[documentID]
+	if !ok {
+		return Document{}, false, nil
+	}
+
+	doc.Status = "queued"
+	doc.Progress = 0
+	doc.UpdatedAt = time.Now().UTC()
+	s.documents[documentID] = doc
+
+	return doc, true, nil
+}
+
 func (s *MemoryStore) RunPipeline(ctx context.Context, documentID string) {
 	for idx, stageName := range stageOrder {
 		select {

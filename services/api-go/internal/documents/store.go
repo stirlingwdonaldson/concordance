@@ -9,5 +9,6 @@ type Store interface {
 	ListPassages(ctx context.Context, documentID string) ([]Passage, error)
 	ListSentences(ctx context.Context, documentID, passageID string) ([]Sentence, error)
 	ListPipelineJobs(ctx context.Context, documentID string) ([]PipelineJob, error)
+	Retry(ctx context.Context, documentID string) (Document, bool, error)
 	RunPipeline(ctx context.Context, documentID string)
 }

@@ -106,6 +106,16 @@ func TestProjectUploadStatusFlow(t *testing.T) {
 		t.Fatalf("expected persisted pipeline jobs")
 	}
 
+	retryDocument(t, testServer.URL, docID)
+	retriedStatus := waitForDocumentReady(t, testServer.URL, docID)
+	if retriedStatus.Status != "ready" {
+		t.Fatalf("unexpected retried status: got=%s", retriedStatus.Status)
+	}
+	retriedJobs := fetchPipelineJobs(t, testServer.URL, docID)
+	if len(retriedJobs) == 0 {
+		t.Fatalf("expected pipeline jobs after retry")
+	}
+
 	matches, err := filepath.Glob(filepath.Join(uploadDir, "*.txt"))
 	if err != nil {
 		t.Fatalf("glob uploaded files: %v", err)
@@ -202,6 +212,25 @@ func fetchPipelineJobs(t *testing.T, baseURL, documentID string) []pipelineJobRe
 	}
 
 	return payload.Items
+}
+
+func retryDocument(t *testing.T, baseURL, documentID string) {
+	t.Helper()
+
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/documents/"+documentID+"/retry", nil)
+	if err != nil {
+		t.Fatalf("build retry request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("retry request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("retry status code: got=%d", resp.StatusCode)
+	}
 }
 
 func uploadDocument(t *testing.T, baseURL, projectID string) string {

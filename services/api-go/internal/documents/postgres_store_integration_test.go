@@ -179,4 +179,23 @@ func TestPostgresStoreRunPipeline(t *testing.T) {
 	if jobs[0].Stage != "ingest_parse" {
 		t.Fatalf("unexpected first stage: got=%s", jobs[0].Stage)
 	}
+
+	retried, ok, err := store.Retry(ctx, doc.ID)
+	if err != nil {
+		t.Fatalf("retry document: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected retry to find document")
+	}
+	if retried.Status != "queued" {
+		t.Fatalf("unexpected retry status: got=%s", retried.Status)
+	}
+
+	retryJobs, err := store.ListPipelineJobs(ctx, doc.ID)
+	if err != nil {
+		t.Fatalf("list pipeline jobs after retry: %v", err)
+	}
+	if len(retryJobs) != 0 {
+		t.Fatalf("expected retry to clear previous jobs, got=%d", len(retryJobs))
+	}
 }

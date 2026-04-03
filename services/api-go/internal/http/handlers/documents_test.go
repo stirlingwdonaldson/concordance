@@ -119,3 +119,41 @@ func TestListPipelineJobs(t *testing.T) {
 		t.Fatalf("unexpected status: got=%d", rr.Code)
 	}
 }
+
+func TestRetryDocumentNotFound(t *testing.T) {
+	h := NewDocumentsHandler(documents.NewMemoryStore(), t.TempDir())
+	req := httptest.NewRequest(http.MethodPost, "/api/documents/d1/retry", nil)
+	req.SetPathValue("documentId", "d1")
+	rr := httptest.NewRecorder()
+
+	h.RetryDocument(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("unexpected status: got=%d", rr.Code)
+	}
+}
+
+func TestRetryDocumentAccepted(t *testing.T) {
+	dir := t.TempDir()
+	store := documents.NewMemoryStore()
+	doc, err := store.Create(context.Background(), documents.CreateInput{
+		ProjectID:  "p1",
+		FileName:   "sample.txt",
+		LocalPath:  filepath.Join(dir, "sample.txt"),
+		SourceHash: "h1",
+		Format:     "txt",
+	})
+	if err != nil {
+		t.Fatalf("create doc: %v", err)
+	}
+	h := NewDocumentsHandler(store, dir)
+	req := httptest.NewRequest(http.MethodPost, "/api/documents/"+doc.ID+"/retry", nil)
+	req.SetPathValue("documentId", doc.ID)
+	rr := httptest.NewRecorder()
+
+	h.RetryDocument(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status: got=%d", rr.Code)
+	}
+}
