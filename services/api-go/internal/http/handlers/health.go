@@ -14,7 +14,8 @@ type HealthHandler struct {
 }
 
 type ReadinessChecks struct {
-	Database func(ctx context.Context) error
+	Database   func(ctx context.Context) error
+	NLPSidecar func(ctx context.Context) error
 }
 
 type HealthResponse struct {
@@ -43,10 +44,18 @@ func (h HealthHandler) GetHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (h HealthHandler) GetReady(w http.ResponseWriter, r *http.Request) {
 	databaseStatus := "ready"
+	nlpStatus := "pending"
 	readyStatus := "ready"
 	if h.checkers.Database != nil {
 		if err := h.checkers.Database(r.Context()); err != nil {
 			databaseStatus = "failed"
+			readyStatus = "degraded"
+		}
+	}
+	if h.checkers.NLPSidecar != nil {
+		nlpStatus = "ready"
+		if err := h.checkers.NLPSidecar(r.Context()); err != nil {
+			nlpStatus = "failed"
 			readyStatus = "degraded"
 		}
 	}
@@ -56,7 +65,7 @@ func (h HealthHandler) GetReady(w http.ResponseWriter, r *http.Request) {
 		"status":  readyStatus,
 		"checks": map[string]string{
 			"database":    databaseStatus,
-			"nlp_sidecar": "pending",
+			"nlp_sidecar": nlpStatus,
 		},
 	}
 

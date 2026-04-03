@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"concordance/services/api-go/internal/nlp"
+	"concordance/services/api-go/internal/nlpv1"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,6 +18,7 @@ import (
 var stageOrder = []string{
 	"ingest_parse",
 	"segment_structure",
+	"nlp_analyze",
 	"finalize_ready",
 }
 
@@ -25,10 +28,16 @@ var sentencePattern = regexp.MustCompile(`[^.!?]+[.!?]?`)
 type PostgresStore struct {
 	pool   *pgxpool.Pool
 	events *JobEventBroker
+	nlp    nlp.Client
 }
 
-func NewPostgresStore(pool *pgxpool.Pool, events *JobEventBroker) *PostgresStore {
-	return &PostgresStore{pool: pool, events: events}
+func NewPostgresStore(pool *pgxpool.Pool, events *JobEventBroker, nlpClient ...nlp.Client) *PostgresStore {
+	var client nlp.Client
+	if len(nlpClient) > 0 {
+		client = nlpClient[0]
+	}
+
+	return &PostgresStore{pool: pool, events: events, nlp: client}
 }
 
 func (s *PostgresStore) Create(ctx context.Context, input CreateInput) (Document, error) {
@@ -341,12 +350,15 @@ func (s *PostgresStore) runIngestionPipeline(ctx context.Context, document Docum
 	if document.Format != "txt" {
 		return errors.New("only txt ingestion is supported in this phase")
 	}
+	stageProgress := func(index int) float64 {
+		return float64(index+1) / float64(len(stageOrder))
+	}
 
 	stageStart := time.Now().UTC()
-	if err := s.markStage(ctx, document.ID, stageOrder[0], 0.34); err != nil {
+	if err := s.markStage(ctx, document.ID, stageOrder[0], stageProgress(0)); err != nil {
 		return err
 	}
-	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[0], 0.34, "loading source text")
+	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[0], stageProgress(0), "loading source text")
 
 	content, err := os.ReadFile(document.LocalPath)
 	if err != nil {
@@ -355,33 +367,49 @@ func (s *PostgresStore) runIngestionPipeline(ctx context.Context, document Docum
 	if err := s.recordStageJob(ctx, document.ID, stageOrder[0], "completed", "loaded source text", stageStart, time.Now().UTC()); err != nil {
 		return err
 	}
-	s.publishStageCompleted(document.ID, document.ProjectID, stageOrder[0], 0.34, "loaded source text", stageStart, time.Now().UTC())
+	s.publishStageCompleted(document.ID, document.ProjectID, stageOrder[0], stageProgress(0), "loaded source text", stageStart, time.Now().UTC())
 
 	stageStart = time.Now().UTC()
-	if err := s.markStage(ctx, document.ID, stageOrder[1], 0.67); err != nil {
+	if err := s.markStage(ctx, document.ID, stageOrder[1], stageProgress(1)); err != nil {
 		return err
 	}
-	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[1], 0.67, "segmenting passages and sentences")
+	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[1], stageProgress(1), "segmenting passages and sentences")
 	if err := s.persistStructure(ctx, document.ID, string(content)); err != nil {
 		failedAt := time.Now().UTC()
 		_ = s.recordStageJob(ctx, document.ID, stageOrder[1], "failed", err.Error(), stageStart, failedAt)
-		s.publishStageFailed(document.ID, document.ProjectID, stageOrder[1], 0.67, err.Error(), stageStart, failedAt)
+		s.publishStageFailed(document.ID, document.ProjectID, stageOrder[1], stageProgress(1), err.Error(), stageStart, failedAt)
 		return err
 	}
 	if err := s.recordStageJob(ctx, document.ID, stageOrder[1], "completed", "stored passages and sentences", stageStart, time.Now().UTC()); err != nil {
 		return err
 	}
-	s.publishStageCompleted(document.ID, document.ProjectID, stageOrder[1], 0.67, "stored passages and sentences", stageStart, time.Now().UTC())
+	s.publishStageCompleted(document.ID, document.ProjectID, stageOrder[1], stageProgress(1), "stored passages and sentences", stageStart, time.Now().UTC())
 
 	stageStart = time.Now().UTC()
-	if err := s.markStage(ctx, document.ID, stageOrder[2], 1); err != nil {
+	if err := s.markStage(ctx, document.ID, stageOrder[2], stageProgress(2)); err != nil {
 		return err
 	}
-	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[2], 1, "finalizing document")
-	if err := s.recordStageJob(ctx, document.ID, stageOrder[2], "completed", "document ready", stageStart, time.Now().UTC()); err != nil {
+	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[2], stageProgress(2), "analyzing document tokens")
+	if err := s.analyzeDocument(ctx, document); err != nil {
+		failedAt := time.Now().UTC()
+		_ = s.recordStageJob(ctx, document.ID, stageOrder[2], "failed", err.Error(), stageStart, failedAt)
+		s.publishStageFailed(document.ID, document.ProjectID, stageOrder[2], stageProgress(2), err.Error(), stageStart, failedAt)
 		return err
 	}
-	s.publishStageCompleted(document.ID, document.ProjectID, stageOrder[2], 1, "document ready", stageStart, time.Now().UTC())
+	if err := s.recordStageJob(ctx, document.ID, stageOrder[2], "completed", "analyzed document tokens", stageStart, time.Now().UTC()); err != nil {
+		return err
+	}
+	s.publishStageCompleted(document.ID, document.ProjectID, stageOrder[2], stageProgress(2), "analyzed document tokens", stageStart, time.Now().UTC())
+
+	stageStart = time.Now().UTC()
+	if err := s.markStage(ctx, document.ID, stageOrder[3], stageProgress(3)); err != nil {
+		return err
+	}
+	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[3], stageProgress(3), "finalizing document")
+	if err := s.recordStageJob(ctx, document.ID, stageOrder[3], "completed", "document ready", stageStart, time.Now().UTC()); err != nil {
+		return err
+	}
+	s.publishStageCompleted(document.ID, document.ProjectID, stageOrder[3], stageProgress(3), "document ready", stageStart, time.Now().UTC())
 
 	_, err = s.pool.Exec(ctx, `
 update documents
@@ -439,6 +467,131 @@ values ($1, $2, $3, $4, $5, $6)
 `, uuid.New().String(), passageID, sentenceIndex, sentence.Text, sentence.StartChar, sentence.EndChar); err != nil {
 				return err
 			}
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+type nlpSentenceRow struct {
+	PassageID string
+	ID        string
+	Text      string
+	StartChar int64
+	EndChar   int64
+}
+
+func (s *PostgresStore) analyzeDocument(ctx context.Context, document Document) error {
+	if s.nlp == nil {
+		return nil
+	}
+
+	sentenceRows, err := s.loadDocumentSentences(ctx, document.ID)
+	if err != nil {
+		return err
+	}
+
+	request := &nlpv1.AnalyzeDocumentRequest{
+		ProjectId:    document.ProjectID,
+		DocumentId:   document.ID,
+		LanguageHint: "en",
+		Passages:     make([]*nlpv1.PassageInput, 0),
+	}
+
+	passageInputs := make(map[string]*nlpv1.PassageInput)
+	passageOrder := make([]string, 0)
+	for _, row := range sentenceRows {
+		passageInput, ok := passageInputs[row.PassageID]
+		if !ok {
+			passageInput = &nlpv1.PassageInput{PassageId: row.PassageID, Sentences: make([]*nlpv1.SentenceInput, 0)}
+			passageInputs[row.PassageID] = passageInput
+			passageOrder = append(passageOrder, row.PassageID)
+		}
+
+		passageInput.Sentences = append(passageInput.Sentences, &nlpv1.SentenceInput{
+			SentenceId: row.ID,
+			Text:       row.Text,
+			StartChar:  row.StartChar,
+			EndChar:    row.EndChar,
+		})
+	}
+
+	for _, passageID := range passageOrder {
+		request.Passages = append(request.Passages, passageInputs[passageID])
+	}
+
+	response, err := s.nlp.AnalyzeDocument(ctx, request)
+	if err != nil {
+		return err
+	}
+
+	return s.persistTokens(ctx, document.ID, response.Tokens)
+}
+
+func (s *PostgresStore) loadDocumentSentences(ctx context.Context, documentID string) ([]nlpSentenceRow, error) {
+	const query = `
+select passages.id, sentences.id, sentences.text, coalesce(sentences.start_char, 0), coalesce(sentences.end_char, 0)
+from passages
+join sentences on sentences.passage_id = passages.id
+where passages.document_id = $1
+order by passages.passage_index asc, sentences.sentence_index asc
+`
+
+	rows, err := s.pool.Query(ctx, query, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]nlpSentenceRow, 0)
+	for rows.Next() {
+		var row nlpSentenceRow
+		if err := rows.Scan(&row.PassageID, &row.ID, &row.Text, &row.StartChar, &row.EndChar); err != nil {
+			return nil, err
+		}
+
+		items = append(items, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return items, nil
+}
+
+func (s *PostgresStore) persistTokens(ctx context.Context, documentID string, tokens []*nlpv1.Token) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `delete from tokens where document_id = $1`, documentID); err != nil {
+		return err
+	}
+
+	for _, token := range tokens {
+		if token.GetSentenceId() == "" {
+			continue
+		}
+
+		if _, err := tx.Exec(ctx, `
+insert into tokens (
+  document_id,
+  sentence_id,
+  token_index,
+  surface,
+  lemma,
+  pos,
+  is_stopword,
+  is_punct,
+  start_char,
+  end_char
+)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+`, documentID, token.GetSentenceId(), token.GetTokenIndex(), token.GetSurface(), token.GetLemma(), token.GetPos(), token.GetIsStopword(), token.GetIsPunct(), token.GetStartChar(), token.GetEndChar()); err != nil {
+			return err
 		}
 	}
 

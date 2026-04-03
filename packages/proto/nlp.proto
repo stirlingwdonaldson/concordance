@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package concordance.nlp.v1;
 
-option go_package = "concordance/packages/proto/gen/go/nlp/v1;nlpv1";
+option go_package = "concordance/services/api-go/internal/nlpv1;nlpv1";
 
 service NLPService {
   rpc Health(HealthRequest) returns (HealthResponse);

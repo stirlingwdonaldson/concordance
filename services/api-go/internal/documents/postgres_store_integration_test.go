@@ -173,11 +173,22 @@ func TestPostgresStoreRunPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list pipeline jobs: %v", err)
 	}
-	if len(jobs) != 3 {
+	if len(jobs) != 4 {
 		t.Fatalf("unexpected pipeline job count: got=%d", len(jobs))
 	}
 	if jobs[0].Stage != "ingest_parse" {
 		t.Fatalf("unexpected first stage: got=%s", jobs[0].Stage)
+	}
+	if jobs[2].Stage != "nlp_analyze" {
+		t.Fatalf("unexpected nlp stage: got=%s", jobs[2].Stage)
+	}
+
+	var tokenCount int
+	if err := pool.QueryRow(ctx, "select count(*) from tokens where document_id = $1", doc.ID).Scan(&tokenCount); err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if tokenCount != 0 {
+		t.Fatalf("expected no tokens without nlp client, got=%d", tokenCount)
 	}
 
 	retried, ok, err := store.Retry(ctx, doc.ID)
