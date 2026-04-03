@@ -29,6 +29,18 @@ type documentResponse struct {
 	Progress float64 `json:"progress"`
 }
 
+type listResponse[T any] struct {
+	Items []T `json:"items"`
+}
+
+type passageResponse struct {
+	ID string `json:"id"`
+}
+
+type sentenceResponse struct {
+	ID string `json:"id"`
+}
+
 func TestProjectUploadStatusFlow(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -74,6 +86,16 @@ func TestProjectUploadStatusFlow(t *testing.T) {
 		t.Fatalf("unexpected final document progress: got=%v", status.Progress)
 	}
 
+	passages := fetchPassages(t, testServer.URL, docID)
+	if len(passages) == 0 {
+		t.Fatalf("expected persisted passages")
+	}
+
+	sentences := fetchSentences(t, testServer.URL, docID)
+	if len(sentences) == 0 {
+		t.Fatalf("expected persisted sentences")
+	}
+
 	matches, err := filepath.Glob(filepath.Join(uploadDir, "*.txt"))
 	if err != nil {
 		t.Fatalf("glob uploaded files: %v", err)
@@ -107,6 +129,48 @@ func createProject(t *testing.T, baseURL string) string {
 	}
 
 	return payload.ID
+}
+
+func fetchPassages(t *testing.T, baseURL, documentID string) []passageResponse {
+	t.Helper()
+
+	resp, err := http.Get(baseURL + "/api/documents/" + documentID + "/passages")
+	if err != nil {
+		t.Fatalf("passages request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("passages status code: got=%d", resp.StatusCode)
+	}
+
+	var payload listResponse[passageResponse]
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode passages response: %v", err)
+	}
+
+	return payload.Items
+}
+
+func fetchSentences(t *testing.T, baseURL, documentID string) []sentenceResponse {
+	t.Helper()
+
+	resp, err := http.Get(baseURL + "/api/documents/" + documentID + "/sentences")
+	if err != nil {
+		t.Fatalf("sentences request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sentences status code: got=%d", resp.StatusCode)
+	}
+
+	var payload listResponse[sentenceResponse]
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode sentences response: %v", err)
+	}
+
+	return payload.Items
 }
 
 func uploadDocument(t *testing.T, baseURL, projectID string) string {

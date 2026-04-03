@@ -80,3 +80,29 @@ func TestGetDocumentStatusNotFound(t *testing.T) {
 		t.Fatalf("unexpected status: got=%d", rr.Code)
 	}
 }
+
+func TestListPassages(t *testing.T) {
+	h := NewDocumentsHandler(documents.NewMemoryStore(), t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/d1/passages", nil)
+	req.SetPathValue("documentId", "d1")
+	rr := httptest.NewRecorder()
+
+	h.ListPassages(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got=%d", rr.Code)
+	}
+}
+
+func TestListSentences(t *testing.T) {
+	h := NewDocumentsHandler(documents.NewMemoryStore(), t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/d1/sentences", nil)
+	req.SetPathValue("documentId", "d1")
+	rr := httptest.NewRecorder()
+
+	h.ListSentences(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got=%d", rr.Code)
+	}
+}

@@ -87,6 +87,29 @@ func (h DocumentsHandler) ListProjectDocuments(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (h DocumentsHandler) ListPassages(w http.ResponseWriter, r *http.Request) {
+	documentID := r.PathValue("documentId")
+	items, err := h.store.ListPassages(r.Context(), documentID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to list passages"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h DocumentsHandler) ListSentences(w http.ResponseWriter, r *http.Request) {
+	documentID := r.PathValue("documentId")
+	passageID := r.URL.Query().Get("passageId")
+	items, err := h.store.ListSentences(r.Context(), documentID, passageID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to list sentences"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func saveUploadFile(uploadDir, fileName string, reader io.Reader) (string, string, error) {
 	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
 		return "", "", err

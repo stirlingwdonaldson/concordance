@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"concordance/services/api-go/internal/db"
 	"concordance/services/api-go/internal/projects"
@@ -31,6 +30,15 @@ func TestPostgresStoreCreateGetAndList(t *testing.T) {
 
 	if _, err := pool.Exec(ctx, "delete from documents"); err != nil {
 		t.Fatalf("reset documents table: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "delete from pipeline_jobs"); err != nil {
+		t.Fatalf("reset pipeline jobs table: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "delete from sentences"); err != nil {
+		t.Fatalf("reset sentences table: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "delete from passages"); err != nil {
+		t.Fatalf("reset passages table: %v", err)
 	}
 	if _, err := pool.Exec(ctx, "delete from projects"); err != nil {
 		t.Fatalf("reset projects table: %v", err)
@@ -93,6 +101,15 @@ func TestPostgresStoreRunPipeline(t *testing.T) {
 	if _, err := pool.Exec(ctx, "delete from documents"); err != nil {
 		t.Fatalf("reset documents table: %v", err)
 	}
+	if _, err := pool.Exec(ctx, "delete from pipeline_jobs"); err != nil {
+		t.Fatalf("reset pipeline jobs table: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "delete from sentences"); err != nil {
+		t.Fatalf("reset sentences table: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "delete from passages"); err != nil {
+		t.Fatalf("reset passages table: %v", err)
+	}
 	if _, err := pool.Exec(ctx, "delete from projects"); err != nil {
 		t.Fatalf("reset projects table: %v", err)
 	}
@@ -104,10 +121,16 @@ func TestPostgresStoreRunPipeline(t *testing.T) {
 	}
 
 	store := NewPostgresStore(pool)
+	tmpDir := t.TempDir()
+	textPath := filepath.Join(tmpDir, "war-and-peace.txt")
+	if err := os.WriteFile(textPath, []byte("Call me Ishmael. Some years ago.\n\nThis is a second paragraph."), 0o644); err != nil {
+		t.Fatalf("write source text: %v", err)
+	}
+
 	doc, err := store.Create(ctx, CreateInput{
 		ProjectID:  project.ID,
 		FileName:   "war-and-peace.txt",
-		LocalPath:  "/tmp/war-and-peace.txt",
+		LocalPath:  textPath,
 		SourceHash: "hash-2",
 		Format:     "txt",
 	})
@@ -116,7 +139,6 @@ func TestPostgresStoreRunPipeline(t *testing.T) {
 	}
 
 	store.RunPipeline(ctx, doc.ID)
-	time.Sleep(200 * time.Millisecond)
 
 	updated, ok := store.Get(ctx, doc.ID)
 	if !ok {
@@ -129,5 +151,29 @@ func TestPostgresStoreRunPipeline(t *testing.T) {
 
 	if updated.Progress != 1 {
 		t.Fatalf("unexpected final progress: got=%v", updated.Progress)
+	}
+
+	passages, err := store.ListPassages(ctx, doc.ID)
+	if err != nil {
+		t.Fatalf("list passages: %v", err)
+	}
+	if len(passages) != 2 {
+		t.Fatalf("unexpected passages count: got=%d", len(passages))
+	}
+
+	sentences, err := store.ListSentences(ctx, doc.ID, "")
+	if err != nil {
+		t.Fatalf("list sentences: %v", err)
+	}
+	if len(sentences) < 3 {
+		t.Fatalf("expected at least 3 sentences, got=%d", len(sentences))
+	}
+
+	var stageCount int
+	if err := pool.QueryRow(ctx, "select count(*) from pipeline_jobs where document_id = $1", doc.ID).Scan(&stageCount); err != nil {
+		t.Fatalf("count pipeline jobs: %v", err)
+	}
+	if stageCount != 3 {
+		t.Fatalf("unexpected pipeline job count: got=%d", stageCount)
 	}
 }

@@ -61,8 +61,16 @@ func (s *MemoryStore) ListByProject(_ context.Context, projectID string) ([]Docu
 	return out, nil
 }
 
+func (s *MemoryStore) ListPassages(_ context.Context, _ string) ([]Passage, error) {
+	return []Passage{}, nil
+}
+
+func (s *MemoryStore) ListSentences(_ context.Context, _, _ string) ([]Sentence, error) {
+	return []Sentence{}, nil
+}
+
 func (s *MemoryStore) RunPipeline(ctx context.Context, documentID string) {
-	for idx, stageName := range stages {
+	for idx, stageName := range stageOrder {
 		select {
 		case <-ctx.Done():
 			s.markFailed(documentID)
@@ -70,7 +78,7 @@ func (s *MemoryStore) RunPipeline(ctx context.Context, documentID string) {
 		default:
 		}
 
-		s.markStage(documentID, stageName, float64(idx+1)/float64(len(stages)))
+		s.markStage(documentID, stageName, float64(idx+1)/float64(len(stageOrder)))
 		time.Sleep(150 * time.Millisecond)
 	}
 }
