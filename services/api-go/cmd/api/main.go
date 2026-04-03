@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"concordance/services/api-go/internal/config"
+	"concordance/services/api-go/internal/documents"
 	"concordance/services/api-go/internal/http/handlers"
 	"concordance/services/api-go/internal/http/router"
 	"concordance/services/api-go/internal/projects"
@@ -21,7 +22,9 @@ func main() {
 	health := handlers.NewHealthHandler(cfg)
 	projectStore := projects.NewMemoryStore()
 	projectHandlers := handlers.NewProjectsHandler(projectStore)
-	h := router.New(health, projectHandlers)
+	documentStore := documents.NewMemoryStore()
+	documentHandlers := handlers.NewDocumentsHandler(documentStore, cfg.UploadDir)
+	h := router.New(health, projectHandlers, documentHandlers)
 
 	server := http.Server{
 		Addr:              cfg.Addr(),

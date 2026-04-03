@@ -10,6 +10,7 @@ type Config struct {
 	PipelineVersion string
 	EmbeddingModel  string
 	EmbeddingDim    int
+	UploadDir       string
 }
 
 func Load() Config {
@@ -23,6 +24,7 @@ func Load() Config {
 		PipelineVersion: envOrDefault("PIPELINE_VERSION", "v0"),
 		EmbeddingModel:  envOrDefault("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
 		EmbeddingDim:    384,
+		UploadDir:       envOrDefault("UPLOAD_DIR", ".concordance-data/uploads"),
 	}
 }
 
