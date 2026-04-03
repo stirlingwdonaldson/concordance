@@ -71,7 +71,8 @@ func newTestRouter() http.Handler {
 		Database: func(context.Context) error { return nil },
 	})
 	projectHandlers := handlers.NewProjectsHandler(projects.NewMemoryStore())
-	documentHandlers := handlers.NewDocumentsHandler(documents.NewMemoryStore(), "")
+	events := documents.NewJobEventBroker()
+	documentHandlers := handlers.NewDocumentsHandler(documents.NewMemoryStore(events), "", events)
 
 	return New(health, projectHandlers, documentHandlers)
 }

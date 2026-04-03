@@ -23,11 +23,12 @@ var paragraphBreakPattern = regexp.MustCompile(`\n\s*\n+`)
 var sentencePattern = regexp.MustCompile(`[^.!?]+[.!?]?`)
 
 type PostgresStore struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	events *JobEventBroker
 }
 
-func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
-	return &PostgresStore{pool: pool}
+func NewPostgresStore(pool *pgxpool.Pool, events *JobEventBroker) *PostgresStore {
+	return &PostgresStore{pool: pool, events: events}
 }
 
 func (s *PostgresStore) Create(ctx context.Context, input CreateInput) (Document, error) {
@@ -328,8 +329,11 @@ func (s *PostgresStore) RunPipeline(ctx context.Context, documentID string) {
 		return
 	}
 
+	s.publishDocumentStatus(document.ID, document.ProjectID, document.Status, document.Progress, "")
+
 	if err := s.runIngestionPipeline(ctx, document); err != nil {
 		s.markFailed(context.Background(), documentID, err.Error())
+		s.publishDocumentStatus(document.ID, document.ProjectID, "failed", document.Progress, err.Error())
 	}
 }
 
@@ -342,6 +346,7 @@ func (s *PostgresStore) runIngestionPipeline(ctx context.Context, document Docum
 	if err := s.markStage(ctx, document.ID, stageOrder[0], 0.34); err != nil {
 		return err
 	}
+	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[0], 0.34, "loading source text")
 
 	content, err := os.ReadFile(document.LocalPath)
 	if err != nil {
@@ -350,26 +355,33 @@ func (s *PostgresStore) runIngestionPipeline(ctx context.Context, document Docum
 	if err := s.recordStageJob(ctx, document.ID, stageOrder[0], "completed", "loaded source text", stageStart, time.Now().UTC()); err != nil {
 		return err
 	}
+	s.publishStageCompleted(document.ID, document.ProjectID, stageOrder[0], 0.34, "loaded source text", stageStart, time.Now().UTC())
 
 	stageStart = time.Now().UTC()
 	if err := s.markStage(ctx, document.ID, stageOrder[1], 0.67); err != nil {
 		return err
 	}
+	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[1], 0.67, "segmenting passages and sentences")
 	if err := s.persistStructure(ctx, document.ID, string(content)); err != nil {
-		_ = s.recordStageJob(ctx, document.ID, stageOrder[1], "failed", err.Error(), stageStart, time.Now().UTC())
+		failedAt := time.Now().UTC()
+		_ = s.recordStageJob(ctx, document.ID, stageOrder[1], "failed", err.Error(), stageStart, failedAt)
+		s.publishStageFailed(document.ID, document.ProjectID, stageOrder[1], 0.67, err.Error(), stageStart, failedAt)
 		return err
 	}
 	if err := s.recordStageJob(ctx, document.ID, stageOrder[1], "completed", "stored passages and sentences", stageStart, time.Now().UTC()); err != nil {
 		return err
 	}
+	s.publishStageCompleted(document.ID, document.ProjectID, stageOrder[1], 0.67, "stored passages and sentences", stageStart, time.Now().UTC())
 
 	stageStart = time.Now().UTC()
 	if err := s.markStage(ctx, document.ID, stageOrder[2], 1); err != nil {
 		return err
 	}
+	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[2], 1, "finalizing document")
 	if err := s.recordStageJob(ctx, document.ID, stageOrder[2], "completed", "document ready", stageStart, time.Now().UTC()); err != nil {
 		return err
 	}
+	s.publishStageCompleted(document.ID, document.ProjectID, stageOrder[2], 1, "document ready", stageStart, time.Now().UTC())
 
 	_, err = s.pool.Exec(ctx, `
 update documents
@@ -379,6 +391,10 @@ set ingest_status = 'ready',
     updated_at = now()
 where id = $1
 `, document.ID)
+	if err == nil {
+		s.publishDocumentStatus(document.ID, document.ProjectID, "ready", 1, "")
+	}
+
 	return err
 }
 
@@ -449,6 +465,59 @@ set ingest_status = 'failed',
     updated_at = now()
 where id = $1
 `, documentID, message)
+}
+
+func (s *PostgresStore) publishStageStarted(documentID, projectID, stage string, progress float64, message string) {
+	s.publishEvent(NewJobEvent("stage_started", documentID, projectID, map[string]any{
+		"stage":    stage,
+		"status":   "running",
+		"progress": progress,
+		"message":  message,
+	}))
+	s.publishDocumentStatus(documentID, projectID, stage, progress, "")
+}
+
+func (s *PostgresStore) publishStageCompleted(documentID, projectID, stage string, progress float64, message string, startedAt, finishedAt time.Time) {
+	s.publishEvent(NewJobEvent("stage_completed", documentID, projectID, map[string]any{
+		"stage":      stage,
+		"status":     "completed",
+		"progress":   progress,
+		"message":    message,
+		"startedAt":  startedAt,
+		"finishedAt": finishedAt,
+	}))
+	s.publishDocumentStatus(documentID, projectID, stage, progress, "")
+}
+
+func (s *PostgresStore) publishStageFailed(documentID, projectID, stage string, progress float64, errMsg string, startedAt, finishedAt time.Time) {
+	s.publishEvent(NewJobEvent("stage_failed", documentID, projectID, map[string]any{
+		"stage":      stage,
+		"status":     "failed",
+		"progress":   progress,
+		"error":      errMsg,
+		"startedAt":  startedAt,
+		"finishedAt": finishedAt,
+	}))
+}
+
+func (s *PostgresStore) publishDocumentStatus(documentID, projectID, status string, progress float64, ingestError string) {
+	payload := map[string]any{
+		"status":   status,
+		"progress": progress,
+	}
+	if ingestError != "" {
+		payload["ingestError"] = ingestError
+	}
+
+	s.publishEvent(NewJobEvent("document_status", documentID, projectID, payload))
+}
+
+func (s *PostgresStore) publishEvent(event JobEvent) {
+	if s.events == nil {
+		return
+	}
+
+	s.events.Publish(event)
 }
 
 func (s *PostgresStore) recordStageJob(ctx context.Context, documentID, stage, status, message string, startedAt, finishedAt time.Time) error {

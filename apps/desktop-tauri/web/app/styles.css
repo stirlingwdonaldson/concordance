@@ -120,6 +120,24 @@ button:disabled {
   background: #fff2ef;
 }
 
+.stream-state {
+  margin: 0 0 0.8rem;
+  color: var(--muted);
+}
+
+.stream-state strong {
+  color: var(--text);
+}
+
+.stream-state.connected strong {
+  color: #2f7a45;
+}
+
+.stream-state.reconnecting strong,
+.stream-state.connecting strong {
+  color: #a56b22;
+}
+
 @media (max-width: 640px) {
   .page {
     margin-top: 1rem;

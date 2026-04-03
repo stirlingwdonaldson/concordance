@@ -32,7 +32,38 @@ type PipelineJob = {
   finishedAt: string;
 };
 
+type JobStreamEvent = {
+  version: string;
+  eventId: string;
+  eventType:
+    | "snapshot"
+    | "stage_started"
+    | "stage_completed"
+    | "stage_failed"
+    | "document_status"
+    | "heartbeat";
+  occurredAt: string;
+  documentId?: string;
+  projectId?: string;
+  payload: Record<string, unknown>;
+};
+
+type StreamConnectionState =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "reconnecting";
+
 const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8080";
+
+function toWebSocketBase(rawBase: string): string {
+  const url = new URL(rawBase);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "";
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
+}
 
 export default function HomePage() {
   const [health, setHealth] = useState<Health | null>(null);
@@ -43,6 +74,8 @@ export default function HomePage() {
   const [selectedDocument, setSelectedDocument] = useState<string>("");
   const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
+  const [streamState, setStreamState] = useState<StreamConnectionState>("idle");
+  const wsBase = useMemo(() => toWebSocketBase(apiBase), []);
 
   const selectedProjectExists = useMemo(
     () => projects.some((project) => project.id === selectedProject),
@@ -74,6 +107,139 @@ export default function HomePage() {
       setPipelineJobs([]);
     }
   }, [selectedDocument]);
+
+  useEffect(() => {
+    if (selectedDocument === "") {
+      setStreamState("idle");
+      return;
+    }
+
+    const documentId = selectedDocument;
+    const projectId = selectedProject;
+    let closed = false;
+    let socket: WebSocket | null = null;
+    let retryDelayMs = 500;
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+    let hasConnected = false;
+
+    function updateDocumentStatus(status: string, progress: number) {
+      setDocuments((current) =>
+        current.map((doc) =>
+          doc.id === documentId ? { ...doc, status, progress } : doc,
+        ),
+      );
+    }
+
+    function handleStreamMessage(rawData: string) {
+      let event: JobStreamEvent;
+      try {
+        event = JSON.parse(rawData) as JobStreamEvent;
+      } catch {
+        return;
+      }
+
+      if (event.eventType === "snapshot") {
+        const payloadDocument = event.payload.document as
+          | { status?: string; progress?: number }
+          | undefined;
+        if (
+          payloadDocument?.status !== undefined &&
+          payloadDocument?.progress !== undefined
+        ) {
+          updateDocumentStatus(
+            payloadDocument.status,
+            payloadDocument.progress,
+          );
+        }
+
+        const payloadJobs = event.payload.jobs;
+        if (Array.isArray(payloadJobs)) {
+          setPipelineJobs(payloadJobs as PipelineJob[]);
+        }
+
+        return;
+      }
+
+      if (event.eventType === "document_status") {
+        const status = event.payload.status;
+        const progress = event.payload.progress;
+        if (typeof status === "string" && typeof progress === "number") {
+          updateDocumentStatus(status, progress);
+        }
+        return;
+      }
+
+      if (
+        event.eventType === "stage_started" ||
+        event.eventType === "stage_completed" ||
+        event.eventType === "stage_failed"
+      ) {
+        void refreshPipelineJobs(documentId);
+        if (projectId !== "") {
+          void refreshDocuments(projectId);
+        }
+      }
+    }
+
+    function connect() {
+      if (closed) {
+        return;
+      }
+
+      setStreamState(hasConnected ? "reconnecting" : "connecting");
+      const socketUrl = `${wsBase}/ws/jobs?documentId=${encodeURIComponent(documentId)}`;
+      socket = new WebSocket(socketUrl);
+
+      socket.onopen = () => {
+        hasConnected = true;
+        retryDelayMs = 500;
+        setStreamState("connected");
+      };
+
+      socket.onmessage = (message) => {
+        if (typeof message.data !== "string") {
+          return;
+        }
+
+        handleStreamMessage(message.data);
+      };
+
+      socket.onerror = () => {
+        socket?.close();
+      };
+
+      socket.onclose = () => {
+        if (closed) {
+          return;
+        }
+
+        setStreamState("reconnecting");
+        retryTimeout = setTimeout(() => {
+          connect();
+        }, retryDelayMs);
+        retryDelayMs = Math.min(retryDelayMs * 2, 10000);
+      };
+    }
+
+    connect();
+
+    return () => {
+      closed = true;
+      if (retryTimeout !== null) {
+        clearTimeout(retryTimeout);
+      }
+      socket?.close();
+    };
+  }, [selectedDocument, selectedProject, wsBase]);
+
+  const streamStatusLabel =
+    streamState === "idle"
+      ? "Idle"
+      : streamState === "connecting"
+        ? "Connecting"
+        : streamState === "connected"
+          ? "Live"
+          : "Reconnecting";
 
   async function refreshHealth() {
     try {
@@ -340,6 +506,9 @@ export default function HomePage() {
 
       <section className="panel">
         <h2>Pipeline timeline</h2>
+        <p className={`stream-state ${streamState}`}>
+          Stream: <strong>{streamStatusLabel}</strong>
+        </p>
         <button
           type="button"
           disabled={selectedDocument === ""}

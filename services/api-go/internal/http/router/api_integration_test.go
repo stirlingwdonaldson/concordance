@@ -72,9 +72,10 @@ func TestProjectUploadStatusFlow(t *testing.T) {
 	}
 
 	uploadDir := t.TempDir()
+	events := documents.NewJobEventBroker()
 	health := handlers.NewHealthHandler(config.Config{}, handlers.ReadinessChecks{Database: pool.Ping})
 	projectHandler := handlers.NewProjectsHandler(projects.NewPostgresStore(pool))
-	documentsHandler := handlers.NewDocumentsHandler(documents.NewPostgresStore(pool), uploadDir)
+	documentsHandler := handlers.NewDocumentsHandler(documents.NewPostgresStore(pool, events), uploadDir, events)
 
 	testServer := httptest.NewServer(New(health, projectHandler, documentsHandler))
 	defer testServer.Close()

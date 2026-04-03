@@ -11,10 +11,11 @@ import (
 type MemoryStore struct {
 	mu        sync.RWMutex
 	documents map[string]Document
+	events    *JobEventBroker
 }
 
-func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{documents: make(map[string]Document)}
+func NewMemoryStore(events *JobEventBroker) *MemoryStore {
+	return &MemoryStore{documents: make(map[string]Document), events: events}
 }
 
 func (s *MemoryStore) Create(_ context.Context, input CreateInput) (Document, error) {
@@ -91,17 +92,46 @@ func (s *MemoryStore) Retry(_ context.Context, documentID string) (Document, boo
 }
 
 func (s *MemoryStore) RunPipeline(ctx context.Context, documentID string) {
+	doc, ok := s.Get(ctx, documentID)
+	if !ok {
+		return
+	}
+
+	s.publishDocumentStatus(doc.ID, doc.ProjectID, doc.Status, doc.Progress, "")
+
 	for idx, stageName := range stageOrder {
 		select {
 		case <-ctx.Done():
 			s.markFailed(documentID)
+			s.publishDocumentStatus(doc.ID, doc.ProjectID, "failed", float64(idx)/float64(len(stageOrder)), "pipeline canceled")
 			return
 		default:
 		}
 
-		s.markStage(documentID, stageName, float64(idx+1)/float64(len(stageOrder)))
+		progress := float64(idx+1) / float64(len(stageOrder))
+		startedAt := time.Now().UTC()
+		s.markStage(documentID, stageName, progress)
+		s.publishEvent(NewJobEvent("stage_started", doc.ID, doc.ProjectID, map[string]any{
+			"stage":    stageName,
+			"status":   "running",
+			"progress": progress,
+			"message":  "processing stage",
+		}))
+		s.publishDocumentStatus(doc.ID, doc.ProjectID, stageName, progress, "")
 		time.Sleep(150 * time.Millisecond)
+
+		finishedAt := time.Now().UTC()
+		s.publishEvent(NewJobEvent("stage_completed", doc.ID, doc.ProjectID, map[string]any{
+			"stage":      stageName,
+			"status":     "completed",
+			"progress":   progress,
+			"message":    "stage complete",
+			"startedAt":  startedAt,
+			"finishedAt": finishedAt,
+		}))
 	}
+
+	s.publishDocumentStatus(doc.ID, doc.ProjectID, "ready", 1, "")
 }
 
 func (s *MemoryStore) markStage(documentID, stageName string, progress float64) {
@@ -134,6 +164,26 @@ func (s *MemoryStore) markFailed(documentID string) {
 	doc.Status = "failed"
 	doc.UpdatedAt = time.Now().UTC()
 	s.documents[documentID] = doc
+}
+
+func (s *MemoryStore) publishDocumentStatus(documentID, projectID, status string, progress float64, ingestError string) {
+	payload := map[string]any{
+		"status":   status,
+		"progress": progress,
+	}
+	if ingestError != "" {
+		payload["ingestError"] = ingestError
+	}
+
+	s.publishEvent(NewJobEvent("document_status", documentID, projectID, payload))
+}
+
+func (s *MemoryStore) publishEvent(event JobEvent) {
+	if s.events == nil {
+		return
+	}
+
+	s.events.Publish(event)
 }
 
 func randomID() string {

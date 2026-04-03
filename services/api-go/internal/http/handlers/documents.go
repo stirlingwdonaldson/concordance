@@ -17,10 +17,11 @@ import (
 type DocumentsHandler struct {
 	store     documents.Store
 	uploadDir string
+	events    *documents.JobEventBroker
 }
 
-func NewDocumentsHandler(store documents.Store, uploadDir string) DocumentsHandler {
-	return DocumentsHandler{store: store, uploadDir: uploadDir}
+func NewDocumentsHandler(store documents.Store, uploadDir string, events *documents.JobEventBroker) DocumentsHandler {
+	return DocumentsHandler{store: store, uploadDir: uploadDir, events: events}
 }
 
 func (h DocumentsHandler) UploadDocument(w http.ResponseWriter, r *http.Request) {

@@ -33,10 +33,11 @@ func main() {
 	health := handlers.NewHealthHandler(cfg, handlers.ReadinessChecks{
 		Database: dbPool.Ping,
 	})
+	jobEvents := documents.NewJobEventBroker()
 	projectStore := projects.NewPostgresStore(dbPool)
 	projectHandlers := handlers.NewProjectsHandler(projectStore)
-	documentStore := documents.NewPostgresStore(dbPool)
-	documentHandlers := handlers.NewDocumentsHandler(documentStore, cfg.UploadDir)
+	documentStore := documents.NewPostgresStore(dbPool, jobEvents)
+	documentHandlers := handlers.NewDocumentsHandler(documentStore, cfg.UploadDir, jobEvents)
 	h := router.New(health, projectHandlers, documentHandlers)
 
 	server := http.Server{

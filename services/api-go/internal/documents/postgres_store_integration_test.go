@@ -50,7 +50,7 @@ func TestPostgresStoreCreateGetAndList(t *testing.T) {
 		t.Fatalf("create project: %v", err)
 	}
 
-	store := NewPostgresStore(pool)
+	store := NewPostgresStore(pool, NewJobEventBroker())
 	created, err := store.Create(ctx, CreateInput{
 		ProjectID:  project.ID,
 		FileName:   "sample.txt",
@@ -120,7 +120,7 @@ func TestPostgresStoreRunPipeline(t *testing.T) {
 		t.Fatalf("create project: %v", err)
 	}
 
-	store := NewPostgresStore(pool)
+	store := NewPostgresStore(pool, NewJobEventBroker())
 	tmpDir := t.TempDir()
 	textPath := filepath.Join(tmpDir, "war-and-peace.txt")
 	if err := os.WriteFile(textPath, []byte("Call me Ishmael. Some years ago.\n\nThis is a second paragraph."), 0o644); err != nil {

@@ -18,8 +18,9 @@ import (
 
 func TestUploadDocument(t *testing.T) {
 	dir := t.TempDir()
-	store := documents.NewMemoryStore()
-	h := NewDocumentsHandler(store, dir)
+	events := documents.NewJobEventBroker()
+	store := documents.NewMemoryStore(events)
+	h := NewDocumentsHandler(store, dir, events)
 
 	body := new(bytes.Buffer)
 	writer := multipart.NewWriter(body)
@@ -69,7 +70,8 @@ func TestUploadDocument(t *testing.T) {
 }
 
 func TestGetDocumentStatusNotFound(t *testing.T) {
-	h := NewDocumentsHandler(documents.NewMemoryStore(), t.TempDir())
+	events := documents.NewJobEventBroker()
+	h := NewDocumentsHandler(documents.NewMemoryStore(events), t.TempDir(), events)
 	req := httptest.NewRequest(http.MethodGet, "/api/documents/missing/status", nil)
 	req.SetPathValue("documentId", "missing")
 	rr := httptest.NewRecorder()
@@ -82,7 +84,8 @@ func TestGetDocumentStatusNotFound(t *testing.T) {
 }
 
 func TestListPassages(t *testing.T) {
-	h := NewDocumentsHandler(documents.NewMemoryStore(), t.TempDir())
+	events := documents.NewJobEventBroker()
+	h := NewDocumentsHandler(documents.NewMemoryStore(events), t.TempDir(), events)
 	req := httptest.NewRequest(http.MethodGet, "/api/documents/d1/passages", nil)
 	req.SetPathValue("documentId", "d1")
 	rr := httptest.NewRecorder()
@@ -95,7 +98,8 @@ func TestListPassages(t *testing.T) {
 }
 
 func TestListSentences(t *testing.T) {
-	h := NewDocumentsHandler(documents.NewMemoryStore(), t.TempDir())
+	events := documents.NewJobEventBroker()
+	h := NewDocumentsHandler(documents.NewMemoryStore(events), t.TempDir(), events)
 	req := httptest.NewRequest(http.MethodGet, "/api/documents/d1/sentences", nil)
 	req.SetPathValue("documentId", "d1")
 	rr := httptest.NewRecorder()
@@ -108,7 +112,8 @@ func TestListSentences(t *testing.T) {
 }
 
 func TestListPipelineJobs(t *testing.T) {
-	h := NewDocumentsHandler(documents.NewMemoryStore(), t.TempDir())
+	events := documents.NewJobEventBroker()
+	h := NewDocumentsHandler(documents.NewMemoryStore(events), t.TempDir(), events)
 	req := httptest.NewRequest(http.MethodGet, "/api/documents/d1/pipeline-jobs", nil)
 	req.SetPathValue("documentId", "d1")
 	rr := httptest.NewRecorder()
@@ -121,7 +126,8 @@ func TestListPipelineJobs(t *testing.T) {
 }
 
 func TestRetryDocumentNotFound(t *testing.T) {
-	h := NewDocumentsHandler(documents.NewMemoryStore(), t.TempDir())
+	events := documents.NewJobEventBroker()
+	h := NewDocumentsHandler(documents.NewMemoryStore(events), t.TempDir(), events)
 	req := httptest.NewRequest(http.MethodPost, "/api/documents/d1/retry", nil)
 	req.SetPathValue("documentId", "d1")
 	rr := httptest.NewRecorder()
@@ -135,7 +141,8 @@ func TestRetryDocumentNotFound(t *testing.T) {
 
 func TestRetryDocumentAccepted(t *testing.T) {
 	dir := t.TempDir()
-	store := documents.NewMemoryStore()
+	events := documents.NewJobEventBroker()
+	store := documents.NewMemoryStore(events)
 	doc, err := store.Create(context.Background(), documents.CreateInput{
 		ProjectID:  "p1",
 		FileName:   "sample.txt",
@@ -146,7 +153,7 @@ func TestRetryDocumentAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create doc: %v", err)
 	}
-	h := NewDocumentsHandler(store, dir)
+	h := NewDocumentsHandler(store, dir, events)
 	req := httptest.NewRequest(http.MethodPost, "/api/documents/"+doc.ID+"/retry", nil)
 	req.SetPathValue("documentId", doc.ID)
 	rr := httptest.NewRecorder()
