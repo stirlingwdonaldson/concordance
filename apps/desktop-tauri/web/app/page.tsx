@@ -54,6 +54,13 @@ export default function HomePage() {
     void refreshProjects();
   }, []);
 
+  function handleRequestError(context: string, error: unknown) {
+    const detail = error instanceof Error ? error.message : "Unknown error";
+    setStatusMessage(
+      `${context} Unable to reach API at ${apiBase} (${detail}).`,
+    );
+  }
+
   useEffect(() => {
     if (selectedProject !== "") {
       void refreshDocuments(selectedProject);
@@ -69,85 +76,107 @@ export default function HomePage() {
   }, [selectedDocument]);
 
   async function refreshHealth() {
-    const response = await fetch(`${apiBase}/ready`);
-    if (!response.ok) {
-      setStatusMessage("Unable to load health state.");
-      return;
-    }
+    try {
+      const response = await fetch(`${apiBase}/ready`);
+      if (!response.ok) {
+        setStatusMessage("Unable to load health state.");
+        return;
+      }
 
-    const payload = (await response.json()) as Health;
-    setHealth(payload);
+      const payload = (await response.json()) as Health;
+      setHealth(payload);
+    } catch (error) {
+      handleRequestError("Unable to load health state.", error);
+    }
   }
 
   async function refreshProjects() {
-    const response = await fetch(`${apiBase}/api/projects`);
-    if (!response.ok) {
-      setStatusMessage("Unable to load projects.");
-      return;
-    }
+    try {
+      const response = await fetch(`${apiBase}/api/projects`);
+      if (!response.ok) {
+        setStatusMessage("Unable to load projects.");
+        return;
+      }
 
-    const payload = (await response.json()) as { items: Project[] };
-    setProjects(payload.items);
+      const payload = (await response.json()) as { items: Project[] };
+      setProjects(payload.items);
 
-    if (payload.items.length > 0) {
-      setSelectedProject((current) => current || payload.items[0].id);
+      if (payload.items.length > 0) {
+        setSelectedProject((current) => current || payload.items[0].id);
+      }
+    } catch (error) {
+      handleRequestError("Unable to load projects.", error);
     }
   }
 
   async function refreshDocuments(projectId: string) {
-    const response = await fetch(
-      `${apiBase}/api/projects/${projectId}/documents`,
-    );
-    if (!response.ok) {
-      setStatusMessage("Unable to load documents.");
-      return;
-    }
-
-    const payload = (await response.json()) as { items: Document[] };
-    setDocuments(payload.items);
-
-    if (payload.items.length === 0) {
-      setSelectedDocument("");
-      return;
-    }
-
-    setSelectedDocument((current) => {
-      const exists = payload.items.some((document) => document.id === current);
-      if (exists) {
-        return current;
+    try {
+      const response = await fetch(
+        `${apiBase}/api/projects/${projectId}/documents`,
+      );
+      if (!response.ok) {
+        setStatusMessage("Unable to load documents.");
+        return;
       }
 
-      return payload.items[0].id;
-    });
+      const payload = (await response.json()) as { items: Document[] };
+      setDocuments(payload.items);
+
+      if (payload.items.length === 0) {
+        setSelectedDocument("");
+        return;
+      }
+
+      setSelectedDocument((current) => {
+        const exists = payload.items.some(
+          (document) => document.id === current,
+        );
+        if (exists) {
+          return current;
+        }
+
+        return payload.items[0].id;
+      });
+    } catch (error) {
+      handleRequestError("Unable to load documents.", error);
+    }
   }
 
   async function refreshPipelineJobs(documentId: string) {
-    const response = await fetch(
-      `${apiBase}/api/documents/${documentId}/pipeline-jobs`,
-    );
-    if (!response.ok) {
-      setStatusMessage("Unable to load pipeline jobs.");
-      return;
-    }
+    try {
+      const response = await fetch(
+        `${apiBase}/api/documents/${documentId}/pipeline-jobs`,
+      );
+      if (!response.ok) {
+        setStatusMessage("Unable to load pipeline jobs.");
+        return;
+      }
 
-    const payload = (await response.json()) as { items: PipelineJob[] };
-    setPipelineJobs(payload.items);
+      const payload = (await response.json()) as { items: PipelineJob[] };
+      setPipelineJobs(payload.items);
+    } catch (error) {
+      handleRequestError("Unable to load pipeline jobs.", error);
+    }
   }
 
   async function createProject() {
-    const response = await fetch(`${apiBase}/api/projects`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: projectName }),
-    });
+    try {
+      const response = await fetch(`${apiBase}/api/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: projectName }),
+      });
 
-    if (!response.ok) {
-      setStatusMessage("Unable to create project.");
-      return;
+      if (!response.ok) {
+        setStatusMessage("Unable to create project.");
+        return;
+      }
+
+      setStatusMessage("Project created.");
+      await refreshProjects();
+    } catch (error) {
+      handleRequestError("Unable to create project.", error);
     }
-
-    setStatusMessage("Project created.");
-    await refreshProjects();
   }
 
   async function onUpload(event: ChangeEvent<HTMLInputElement>) {
@@ -159,24 +188,28 @@ export default function HomePage() {
     const formData = new FormData();
     formData.append("file", file);
 
-    const response = await fetch(
-      `${apiBase}/api/projects/${selectedProject}/documents/upload`,
-      {
-        method: "POST",
-        body: formData,
-      },
-    );
+    try {
+      const response = await fetch(
+        `${apiBase}/api/projects/${selectedProject}/documents/upload`,
+        {
+          method: "POST",
+          body: formData,
+        },
+      );
 
-    if (!response.ok) {
-      setStatusMessage("Upload failed.");
-      return;
+      if (!response.ok) {
+        setStatusMessage("Upload failed.");
+        return;
+      }
+
+      setStatusMessage("Upload accepted. Refreshing status.");
+      await refreshDocuments(selectedProject);
+      window.setTimeout(() => {
+        void refreshDocuments(selectedProject);
+      }, 800);
+    } catch (error) {
+      handleRequestError("Upload failed.", error);
     }
-
-    setStatusMessage("Upload accepted. Refreshing status.");
-    await refreshDocuments(selectedProject);
-    window.setTimeout(() => {
-      void refreshDocuments(selectedProject);
-    }, 800);
   }
 
   return (
