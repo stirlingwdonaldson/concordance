@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: concordance-postgres
+    environment:
+      POSTGRES_DB: concordance
+      POSTGRES_USER: concordance
+      POSTGRES_PASSWORD: concordance
+    ports:
+      - "54329:5432"
+    volumes:
+      - concordance-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U concordance -d concordance"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  concordance-pgdata:
