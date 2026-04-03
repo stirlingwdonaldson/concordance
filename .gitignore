@@ -1,0 +1,21 @@
+.DS_Store
+.env
+.env.*
+
+# Go
+bin/
+dist/
+*.test
+*.out
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node
+node_modules/
+.next/
+
+# Local app data
+.concordance-data/

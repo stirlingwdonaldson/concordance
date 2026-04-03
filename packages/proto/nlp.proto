@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package concordance.nlp.v1;
+
+option go_package = "concordance/packages/proto/gen/go/nlp/v1;nlpv1";
+
+service NLPService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc AnalyzeDocument(AnalyzeDocumentRequest) returns (AnalyzeDocumentResponse);
+  rpc EmbedPassages(EmbedPassagesRequest) returns (EmbedPassagesResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string service = 1;
+  string status = 2;
+  string pipeline_version = 3;
+  string embedding_model = 4;
+  int32 embedding_dim = 5;
+}
+
+message AnalyzeDocumentRequest {
+  string project_id = 1;
+  string document_id = 2;
+  repeated PassageInput passages = 3;
+  string language_hint = 4;
+  repeated string custom_stopwords = 5;
+}
+
+message PassageInput {
+  string passage_id = 1;
+  repeated SentenceInput sentences = 2;
+}
+
+message SentenceInput {
+  string sentence_id = 1;
+  string text = 2;
+  int64 start_char = 3;
+  int64 end_char = 4;
+}
+
+message AnalyzeDocumentResponse {
+  string pipeline_version = 1;
+  repeated SentenceLanguage sentence_languages = 2;
+  repeated Token tokens = 3;
+  repeated EntityMention mentions = 4;
+}
+
+message SentenceLanguage {
+  string sentence_id = 1;
+  string language = 2;
+  float confidence = 3;
+}
+
+message Token {
+  string sentence_id = 1;
+  int32 token_index = 2;
+  string surface = 3;
+  string lemma = 4;
+  string pos = 5;
+  bool is_stopword = 6;
+  bool is_punct = 7;
+  int64 start_char = 8;
+  int64 end_char = 9;
+}
+
+message EntityMention {
+  string sentence_id = 1;
+  string surface = 2;
+  string ner_label = 3;
+  string mention_type = 4;
+  float confidence = 5;
+  int64 start_char = 6;
+  int64 end_char = 7;
+}
+
+message EmbedPassagesRequest {
+  repeated PassageToEmbed passages = 1;
+}
+
+message PassageToEmbed {
+  string passage_id = 1;
+  string text = 2;
+}
+
+message EmbedPassagesResponse {
+  string model_name = 1;
+  int32 dim = 2;
+  repeated PassageEmbedding embeddings = 3;
+}
+
+message PassageEmbedding {
+  string passage_id = 1;
+  repeated float values = 2;
+}
