@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"time"
 
+	"concordance/services/api-go/internal/ingest"
 	"concordance/services/api-go/internal/nlp"
 	"concordance/services/api-go/internal/nlpv1"
 	"github.com/google/uuid"
@@ -28,18 +28,28 @@ var paragraphBreakPattern = regexp.MustCompile(`\n\s*\n+`)
 var sentencePattern = regexp.MustCompile(`[^.!?]+[.!?]?`)
 
 type PostgresStore struct {
-	pool   *pgxpool.Pool
-	events *JobEventBroker
-	nlp    nlp.Client
+	pool      *pgxpool.Pool
+	events    *JobEventBroker
+	nlp       nlp.Client
+	extractor *ingest.Extractor
 }
 
 func NewPostgresStore(pool *pgxpool.Pool, events *JobEventBroker, nlpClient ...nlp.Client) *PostgresStore {
+	return NewPostgresStoreWithTikaEndpoint(pool, events, "", nlpClient...)
+}
+
+func NewPostgresStoreWithTikaEndpoint(pool *pgxpool.Pool, events *JobEventBroker, tikaEndpoint string, nlpClient ...nlp.Client) *PostgresStore {
 	var client nlp.Client
 	if len(nlpClient) > 0 {
 		client = nlpClient[0]
 	}
 
-	return &PostgresStore{pool: pool, events: events, nlp: client}
+	return &PostgresStore{
+		pool:      pool,
+		events:    events,
+		nlp:       client,
+		extractor: ingest.NewExtractor(tikaEndpoint),
+	}
 }
 
 func (s *PostgresStore) Create(ctx context.Context, input CreateInput) (Document, error) {
@@ -508,9 +518,6 @@ func (s *PostgresStore) RunPipeline(ctx context.Context, documentID string) {
 }
 
 func (s *PostgresStore) runIngestionPipeline(ctx context.Context, document Document) error {
-	if document.Format != "txt" {
-		return errors.New("only txt ingestion is supported in this phase")
-	}
 	stageProgress := func(index int) float64 {
 		return float64(index+1) / float64(len(stageOrder))
 	}
@@ -521,7 +528,7 @@ func (s *PostgresStore) runIngestionPipeline(ctx context.Context, document Docum
 	}
 	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[0], stageProgress(0), "loading source text")
 
-	content, err := os.ReadFile(document.LocalPath)
+	content, err := s.extractor.ExtractText(ctx, document.LocalPath, document.Format)
 	if err != nil {
 		return err
 	}
@@ -535,7 +542,7 @@ func (s *PostgresStore) runIngestionPipeline(ctx context.Context, document Docum
 		return err
 	}
 	s.publishStageStarted(document.ID, document.ProjectID, stageOrder[1], stageProgress(1), "segmenting passages and sentences")
-	if err := s.persistStructure(ctx, document.ID, string(content)); err != nil {
+	if err := s.persistStructure(ctx, document.ID, content); err != nil {
 		failedAt := time.Now().UTC()
 		_ = s.recordStageJob(ctx, document.ID, stageOrder[1], "failed", err.Error(), stageStart, failedAt)
 		s.publishStageFailed(document.ID, document.ProjectID, stageOrder[1], stageProgress(1), err.Error(), stageStart, failedAt)

@@ -65,7 +65,7 @@ func main() {
 	jobEvents := documents.NewJobEventBroker()
 	projectStore := projects.NewPostgresStore(dbPool)
 	projectHandlers := handlers.NewProjectsHandler(projectStore)
-	documentStore := documents.NewPostgresStore(dbPool, jobEvents, nlpClient)
+	documentStore := documents.NewPostgresStoreWithTikaEndpoint(dbPool, jobEvents, cfg.TikaEndpoint, nlpClient)
 	documentHandlers := handlers.NewDocumentsHandler(documentStore, cfg.UploadDir, jobEvents)
 	h := router.New(health, projectHandlers, documentHandlers)
 

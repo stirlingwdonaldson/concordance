@@ -14,6 +14,7 @@ type Config struct {
 	UploadDir        string
 	DatabaseURL      string
 	MigrationsDir    string
+	TikaEndpoint     string
 	NLPGRPCAddr      string
 	NLPSidecarCmd    string
 	NLPSidecarScript string
@@ -33,6 +34,7 @@ func Load() Config {
 		UploadDir:        envOrDefault("UPLOAD_DIR", ".concordance-data/uploads"),
 		DatabaseURL:      os.Getenv("DATABASE_URL"),
 		MigrationsDir:    envOrDefault("MIGRATIONS_DIR", "migrations"),
+		TikaEndpoint:     envOrDefault("TIKA_ENDPOINT", "http://127.0.0.1:9998"),
 		NLPGRPCAddr:      envOrDefault("NLP_GRPC_ADDR", "127.0.0.1:50051"),
 		NLPSidecarCmd:    envOrDefault("NLP_SIDECAR_CMD", "python3"),
 		NLPSidecarScript: envOrDefault("NLP_SIDECAR_SCRIPT", "../nlp-python/server/main.py"),

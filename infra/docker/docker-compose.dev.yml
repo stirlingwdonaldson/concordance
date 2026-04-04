@@ -16,5 +16,11 @@ services:
       timeout: 3s
       retries: 20
 
+  tika:
+    image: apache/tika:2.9.2.1
+    container_name: concordance-tika
+    ports:
+      - "9998:9998"
+
 volumes:
   concordance-pgdata:
