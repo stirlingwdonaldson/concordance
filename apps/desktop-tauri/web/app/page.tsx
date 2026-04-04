@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { ChangeEvent } from "react";
+import type { ChangeEvent, KeyboardEvent } from "react";
 
 type Health = {
   status: string;
@@ -533,6 +533,65 @@ export default function HomePage() {
     }
   }
 
+  function runKWICQuery() {
+    if (selectedDocument === "") {
+      return;
+    }
+
+    setKWICOffset(0);
+    setKWICPageInput("1");
+    void refreshKWIC(
+      selectedDocument,
+      kwicLemma,
+      kwicLimit,
+      kwicSort,
+      kwicDir,
+      0,
+    );
+  }
+
+  function goToKWICPage() {
+    if (selectedDocument === "") {
+      return;
+    }
+
+    const page = Number.parseInt(kwicPageInput, 10);
+    if (Number.isNaN(page) || page <= 0) {
+      return;
+    }
+
+    const clampedPage = Math.min(page, kwicTotalPages);
+    const nextOffset = (clampedPage - 1) * kwicPageSize;
+    void refreshKWIC(
+      selectedDocument,
+      kwicLemma,
+      kwicLimit,
+      kwicSort,
+      kwicDir,
+      nextOffset,
+    );
+  }
+
+  function handleKWICQueryEnter(
+    event: KeyboardEvent<HTMLInputElement | HTMLSelectElement>,
+  ) {
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+    runKWICQuery();
+  }
+
+  function handleKWICPageEnter(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+    goToKWICPage();
+  }
+
   const kwicPageSize = Math.max(1, Number.parseInt(kwicLimit, 10) || 50);
   const kwicFrom = kwicRows.length === 0 ? 0 : kwicOffset + 1;
   const kwicTo = kwicOffset + kwicRows.length;
@@ -821,12 +880,14 @@ export default function HomePage() {
           <input
             value={kwicLemma}
             onChange={(event) => setKWICLemma(event.target.value)}
+            onKeyDown={handleKWICQueryEnter}
             placeholder="Filter by lemma"
             disabled={selectedDocument === ""}
           />
           <input
             value={kwicLimit}
             onChange={(event) => setKWICLimit(event.target.value)}
+            onKeyDown={handleKWICQueryEnter}
             placeholder="Limit"
             inputMode="numeric"
             disabled={selectedDocument === ""}
@@ -834,6 +895,7 @@ export default function HomePage() {
           <select
             value={kwicSort}
             onChange={(event) => setKWICSort(event.target.value)}
+            onKeyDown={handleKWICQueryEnter}
             disabled={selectedDocument === ""}
           >
             <option value="position">Sort: Position</option>
@@ -843,6 +905,7 @@ export default function HomePage() {
           <select
             value={kwicDir}
             onChange={(event) => setKWICDir(event.target.value)}
+            onKeyDown={handleKWICQueryEnter}
             disabled={selectedDocument === ""}
           >
             <option value="asc">Asc</option>
@@ -851,20 +914,7 @@ export default function HomePage() {
           <button
             type="button"
             disabled={selectedDocument === ""}
-            onClick={() => {
-              if (selectedDocument !== "") {
-                setKWICOffset(0);
-                setKWICPageInput("1");
-                void refreshKWIC(
-                  selectedDocument,
-                  kwicLemma,
-                  kwicLimit,
-                  kwicSort,
-                  kwicDir,
-                  0,
-                );
-              }
-            }}
+            onClick={runKWICQuery}
           >
             Run query
           </button>
@@ -909,6 +959,7 @@ export default function HomePage() {
           <input
             value={kwicPageInput}
             onChange={(event) => setKWICPageInput(event.target.value)}
+            onKeyDown={handleKWICPageEnter}
             placeholder="Page"
             inputMode="numeric"
             disabled={selectedDocument === ""}
@@ -916,23 +967,7 @@ export default function HomePage() {
           <button
             type="button"
             disabled={selectedDocument === ""}
-            onClick={() => {
-              if (selectedDocument !== "") {
-                const page = Number.parseInt(kwicPageInput, 10);
-                if (!Number.isNaN(page) && page > 0) {
-                  const clampedPage = Math.min(page, kwicTotalPages);
-                  const nextOffset = (clampedPage - 1) * kwicPageSize;
-                  void refreshKWIC(
-                    selectedDocument,
-                    kwicLemma,
-                    kwicLimit,
-                    kwicSort,
-                    kwicDir,
-                    nextOffset,
-                  );
-                }
-              }
-            }}
+            onClick={goToKWICPage}
           >
             Go to page
           </button>
