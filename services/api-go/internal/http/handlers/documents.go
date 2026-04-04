@@ -150,6 +150,8 @@ func (h DocumentsHandler) ListKWIC(w http.ResponseWriter, r *http.Request) {
 		Section: strings.TrimSpace(r.URL.Query().Get("section")),
 		Limit:   limit,
 		Offset:  offset,
+		SortBy:  normalizeKWICSortBy(r.URL.Query().Get("sort")),
+		SortDir: normalizeSortDir(r.URL.Query().Get("dir")),
 	}
 
 	total, err := h.store.CountKWIC(r.Context(), documentID, filter)
@@ -169,6 +171,8 @@ func (h DocumentsHandler) ListKWIC(w http.ResponseWriter, r *http.Request) {
 		"total":  total,
 		"limit":  limit,
 		"offset": offset,
+		"sort":   filter.SortBy,
+		"dir":    filter.SortDir,
 	})
 }
 
@@ -257,4 +261,23 @@ func normalizeKWICPage(limit, offset int) (int, int) {
 	}
 
 	return limit, offset
+}
+
+func normalizeKWICSortBy(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "lemma":
+		return "lemma"
+	case "keyword":
+		return "keyword"
+	default:
+		return "position"
+	}
+}
+
+func normalizeSortDir(raw string) string {
+	if strings.EqualFold(strings.TrimSpace(raw), "desc") {
+		return "desc"
+	}
+
+	return "asc"
 }

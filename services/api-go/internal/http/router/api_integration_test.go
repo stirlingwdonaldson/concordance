@@ -62,6 +62,8 @@ type kwicListResponse struct {
 	Total  int            `json:"total"`
 	Limit  int            `json:"limit"`
 	Offset int            `json:"offset"`
+	Sort   string         `json:"sort"`
+	Dir    string         `json:"dir"`
 }
 
 type stubNLPClient struct{}
@@ -306,7 +308,7 @@ func fetchConcordance(t *testing.T, baseURL, documentID string) []concordanceRes
 func fetchKWIC(t *testing.T, baseURL, documentID string) kwicListResponse {
 	t.Helper()
 
-	resp, err := http.Get(baseURL + "/api/documents/" + documentID + "/kwic?limit=5&offset=0")
+	resp, err := http.Get(baseURL + "/api/documents/" + documentID + "/kwic?limit=5&offset=0&sort=keyword&dir=desc")
 	if err != nil {
 		t.Fatalf("kwic request failed: %v", err)
 	}
@@ -325,6 +327,12 @@ func fetchKWIC(t *testing.T, baseURL, documentID string) kwicListResponse {
 	}
 	if payload.Offset != 0 {
 		t.Fatalf("expected kwic offset=0, got=%d", payload.Offset)
+	}
+	if payload.Sort != "keyword" {
+		t.Fatalf("expected kwic sort=keyword, got=%s", payload.Sort)
+	}
+	if payload.Dir != "desc" {
+		t.Fatalf("expected kwic dir=desc, got=%s", payload.Dir)
 	}
 
 	return payload

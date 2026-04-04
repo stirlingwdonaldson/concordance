@@ -21,6 +21,8 @@ type kwicListPayload struct {
 	Total  int                        `json:"total"`
 	Limit  int                        `json:"limit"`
 	Offset int                        `json:"offset"`
+	Sort   string                     `json:"sort"`
+	Dir    string                     `json:"dir"`
 }
 
 func TestUploadDocument(t *testing.T) {
@@ -173,6 +175,12 @@ func TestListKWIC(t *testing.T) {
 	if payload.Offset != 5 {
 		t.Fatalf("expected offset=5, got=%d", payload.Offset)
 	}
+	if payload.Sort != "position" {
+		t.Fatalf("expected default sort=position, got=%s", payload.Sort)
+	}
+	if payload.Dir != "asc" {
+		t.Fatalf("expected default dir=asc, got=%s", payload.Dir)
+	}
 }
 
 func TestListKWICClampsInvalidPaging(t *testing.T) {
@@ -198,6 +206,32 @@ func TestListKWICClampsInvalidPaging(t *testing.T) {
 	}
 	if payload.Offset != 0 {
 		t.Fatalf("expected clamped offset=0, got=%d", payload.Offset)
+	}
+}
+
+func TestListKWICNormalizesSort(t *testing.T) {
+	events := documents.NewJobEventBroker()
+	h := NewDocumentsHandler(documents.NewMemoryStore(events), t.TempDir(), events)
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/d1/kwic?sort=keyword&dir=desc", nil)
+	req.SetPathValue("documentId", "d1")
+	rr := httptest.NewRecorder()
+
+	h.ListKWIC(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got=%d", rr.Code)
+	}
+
+	var payload kwicListPayload
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+
+	if payload.Sort != "keyword" {
+		t.Fatalf("expected sort=keyword, got=%s", payload.Sort)
+	}
+	if payload.Dir != "desc" {
+		t.Fatalf("expected dir=desc, got=%s", payload.Dir)
 	}
 }
 

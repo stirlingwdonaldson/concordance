@@ -62,6 +62,8 @@ type KWICFilter struct {
 	Section string
 	Limit   int
 	Offset  int
+	SortBy  string
+	SortDir string
 }
 
 type KWICOccurrence struct {

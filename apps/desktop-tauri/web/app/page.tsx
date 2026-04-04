@@ -55,6 +55,8 @@ type KWICListPayload = {
   total: number;
   limit: number;
   offset: number;
+  sort: string;
+  dir: string;
 };
 
 type JobStreamEvent = {
@@ -123,6 +125,9 @@ export default function HomePage() {
   const [concordancePOS, setConcordancePOS] = useState("");
   const [kwicLemma, setKWICLemma] = useState("");
   const [kwicLimit, setKWICLimit] = useState("50");
+  const [kwicSort, setKWICSort] = useState("position");
+  const [kwicDir, setKWICDir] = useState("asc");
+  const [kwicPageInput, setKWICPageInput] = useState("1");
   const [statusMessage, setStatusMessage] = useState("");
   const [streamState, setStreamState] = useState<StreamConnectionState>("idle");
   const [lastStreamEventAt, setLastStreamEventAt] = useState<number | null>(
@@ -162,19 +167,28 @@ export default function HomePage() {
         concordanceLemma,
         concordancePOS,
       );
-      void refreshKWIC(selectedDocument, kwicLemma, kwicLimit);
+      void refreshKWIC(
+        selectedDocument,
+        kwicLemma,
+        kwicLimit,
+        kwicSort,
+        kwicDir,
+      );
     } else {
       setPipelineJobs([]);
       setConcordanceTerms([]);
       setKwicRows([]);
       setKWICTotal(0);
       setKWICOffset(0);
+      setKWICPageInput("1");
     }
   }, [
     concordanceLemma,
     concordancePOS,
     kwicLemma,
     kwicLimit,
+    kwicSort,
+    kwicDir,
     selectedDocument,
   ]);
 
@@ -258,7 +272,13 @@ export default function HomePage() {
               concordanceLemma,
               concordancePOS,
             );
-            void refreshKWIC(documentId, kwicLemma, kwicLimit);
+            void refreshKWIC(
+              documentId,
+              kwicLemma,
+              kwicLimit,
+              kwicSort,
+              kwicDir,
+            );
           }
         }
         return;
@@ -274,7 +294,7 @@ export default function HomePage() {
           void refreshDocuments(projectId);
         }
         void refreshConcordance(documentId, concordanceLemma, concordancePOS);
-        void refreshKWIC(documentId, kwicLemma, kwicLimit);
+        void refreshKWIC(documentId, kwicLemma, kwicLimit, kwicSort, kwicDir);
       }
     }
 
@@ -332,6 +352,8 @@ export default function HomePage() {
     concordancePOS,
     kwicLemma,
     kwicLimit,
+    kwicSort,
+    kwicDir,
     selectedDocument,
     selectedProject,
     wsBase,
@@ -473,6 +495,8 @@ export default function HomePage() {
     documentId: string,
     lemma: string,
     rawLimit: string,
+    sortBy: string,
+    sortDir: string,
     rawOffset?: number,
   ) {
     const query = new URLSearchParams();
@@ -484,6 +508,8 @@ export default function HomePage() {
     if (!Number.isNaN(limit) && limit > 0) {
       query.set("limit", String(limit));
     }
+    query.set("sort", sortBy);
+    query.set("dir", sortDir);
 
     const offset = rawOffset ?? kwicOffset;
     query.set("offset", String(Math.max(0, offset)));
@@ -501,6 +527,7 @@ export default function HomePage() {
       setKwicRows(payload.items);
       setKWICTotal(payload.total);
       setKWICOffset(payload.offset);
+      setKWICPageInput(String(Math.floor(payload.offset / payload.limit) + 1));
     } catch (error) {
       handleRequestError("Unable to load KWIC occurrences.", error);
     }
@@ -511,6 +538,7 @@ export default function HomePage() {
   const kwicTo = kwicOffset + kwicRows.length;
   const canGoPrev = kwicOffset > 0;
   const canGoNext = kwicOffset + kwicRows.length < kwicTotal;
+  const kwicTotalPages = Math.max(1, Math.ceil(kwicTotal / kwicPageSize));
 
   async function createProject() {
     try {
@@ -803,13 +831,38 @@ export default function HomePage() {
             inputMode="numeric"
             disabled={selectedDocument === ""}
           />
+          <select
+            value={kwicSort}
+            onChange={(event) => setKWICSort(event.target.value)}
+            disabled={selectedDocument === ""}
+          >
+            <option value="position">Sort: Position</option>
+            <option value="lemma">Sort: Lemma</option>
+            <option value="keyword">Sort: Keyword</option>
+          </select>
+          <select
+            value={kwicDir}
+            onChange={(event) => setKWICDir(event.target.value)}
+            disabled={selectedDocument === ""}
+          >
+            <option value="asc">Asc</option>
+            <option value="desc">Desc</option>
+          </select>
           <button
             type="button"
             disabled={selectedDocument === ""}
             onClick={() => {
               if (selectedDocument !== "") {
                 setKWICOffset(0);
-                void refreshKWIC(selectedDocument, kwicLemma, kwicLimit, 0);
+                setKWICPageInput("1");
+                void refreshKWIC(
+                  selectedDocument,
+                  kwicLemma,
+                  kwicLimit,
+                  kwicSort,
+                  kwicDir,
+                  0,
+                );
               }
             }}
           >
@@ -825,6 +878,8 @@ export default function HomePage() {
                   selectedDocument,
                   kwicLemma,
                   kwicLimit,
+                  kwicSort,
+                  kwicDir,
                   nextOffset,
                 );
               }
@@ -842,6 +897,8 @@ export default function HomePage() {
                   selectedDocument,
                   kwicLemma,
                   kwicLimit,
+                  kwicSort,
+                  kwicDir,
                   nextOffset,
                 );
               }
@@ -849,9 +906,40 @@ export default function HomePage() {
           >
             Next
           </button>
+          <input
+            value={kwicPageInput}
+            onChange={(event) => setKWICPageInput(event.target.value)}
+            placeholder="Page"
+            inputMode="numeric"
+            disabled={selectedDocument === ""}
+          />
+          <button
+            type="button"
+            disabled={selectedDocument === ""}
+            onClick={() => {
+              if (selectedDocument !== "") {
+                const page = Number.parseInt(kwicPageInput, 10);
+                if (!Number.isNaN(page) && page > 0) {
+                  const clampedPage = Math.min(page, kwicTotalPages);
+                  const nextOffset = (clampedPage - 1) * kwicPageSize;
+                  void refreshKWIC(
+                    selectedDocument,
+                    kwicLemma,
+                    kwicLimit,
+                    kwicSort,
+                    kwicDir,
+                    nextOffset,
+                  );
+                }
+              }
+            }}
+          >
+            Go to page
+          </button>
         </div>
         <p className="kwic-meta">
-          Showing {kwicFrom}-{kwicTo} of {kwicTotal}
+          Showing {kwicFrom}-{kwicTo} of {kwicTotal} (page{" "}
+          {Math.floor(kwicOffset / kwicPageSize) + 1} / {kwicTotalPages})
         </p>
         {kwicRows.length === 0 ? (
           <p>No KWIC rows yet.</p>

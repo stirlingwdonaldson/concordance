@@ -3,6 +3,7 @@ package documents
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -318,7 +319,7 @@ order by total_freq desc, lemma asc
 }
 
 func (s *PostgresStore) ListKWIC(ctx context.Context, documentID string, filter KWICFilter) ([]KWICOccurrence, error) {
-	const query = `
+	baseQuery := `
 select ko.id, ko.term_id, ct.lemma, ko.sentence_id, ko.left_context, ko.keyword, ko.right_context, coalesce(ko.section_id::text, ''), coalesce(ko.page_ref, '')
 from kwic_occurrences ko
 join concordance_terms ct on ct.id = ko.term_id
@@ -326,7 +327,6 @@ where ko.document_id = $1
   and ($2 = '' or ct.lemma ilike '%' || $2 || '%')
   and ($3 = '' or coalesce(ko.page_ref, '') = $3)
   and ($4 = '' or ko.section_id::text = $4)
-order by ko.id asc
 limit $5
 offset $6
 `
@@ -343,6 +343,8 @@ offset $6
 	if offset < 0 {
 		offset = 0
 	}
+
+	query := fmt.Sprintf("%s order by %s limit $5 offset $6", strings.TrimSpace(baseQuery), kwicOrderClause(filter.SortBy, filter.SortDir))
 
 	rows, err := s.pool.Query(
 		ctx,
@@ -384,6 +386,23 @@ offset $6
 	}
 
 	return items, nil
+}
+
+func kwicOrderClause(sortBy, sortDir string) string {
+	direction := "asc"
+	if strings.EqualFold(strings.TrimSpace(sortDir), "desc") {
+		direction = "desc"
+	}
+
+	column := "ko.id"
+	switch strings.ToLower(strings.TrimSpace(sortBy)) {
+	case "lemma":
+		column = "ct.lemma"
+	case "keyword":
+		column = "ko.keyword"
+	}
+
+	return fmt.Sprintf("%s %s, ko.id %s", column, direction, direction)
 }
 
 func (s *PostgresStore) CountKWIC(ctx context.Context, documentID string, filter KWICFilter) (int, error) {
