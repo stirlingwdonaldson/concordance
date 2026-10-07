@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -19,9 +22,19 @@ import (
 
 const (
 	tikaMinTimeout = 2 * time.Minute
-	tikaMaxTimeout = 30 * time.Minute
+	tikaMaxTimeout = 45 * time.Minute
+	tikaPerMB      = 30 * time.Second
 	tikaAttempts   = 3
+
+	pdfToTextTimeout = 15 * time.Minute
 )
+
+// pdfToTextBinary is the poppler tool used for PDFs when it is installed. It is
+// roughly 50x faster than Tika on large books and far lighter on memory. It is a
+// variable so tests can point it at a stand-in.
+var pdfToTextBinary = "pdftotext"
+
+var hyphenatedLineBreak = regexp.MustCompile(`([a-z])-\n([a-z])`)
 
 // tikaRetryBase is the base delay between Tika attempts (attempt number times
 // this value). It is a variable so tests can run without real sleeping.
@@ -87,6 +100,12 @@ func (e *Extractor) ExtractText(ctx context.Context, localPath, format string) (
 
 func (e *Extractor) extractBinary(ctx context.Context, localPath, format string) (string, error) {
 	if e.tikaEndpoint == "" {
+		if format == "pdf" {
+			if text, available, err := extractPDFWithPoppler(ctx, localPath); available && err == nil {
+				return text, nil
+			}
+		}
+
 		if text, ok, err := nativeExtract(localPath, format); ok {
 			return text, err
 		}
@@ -94,9 +113,28 @@ func (e *Extractor) extractBinary(ctx context.Context, localPath, format string)
 		return "", fmt.Errorf("unsupported format %q without tika endpoint", format)
 	}
 
+	var popplerErr error
+	if format == "pdf" {
+		text, available, err := extractPDFWithPoppler(ctx, localPath)
+		if available && err == nil {
+			return text, nil
+		}
+		popplerErr = err
+	}
+
 	text, tikaErr := e.extractWithTika(ctx, localPath, format)
 	if tikaErr == nil {
+		if format == "pdf" {
+			// Tika leaves "exam-\nple" style line-end hyphenation in place, which
+			// would split one word into two tokens.
+			text = hyphenatedLineBreak.ReplaceAllString(text, "$1$2")
+		}
+
 		return text, nil
+	}
+
+	if popplerErr != nil {
+		return "", fmt.Errorf("%v; %w", popplerErr, tikaErr)
 	}
 
 	// Tika is the preferred extractor, but for formats we can read ourselves a
@@ -147,14 +185,15 @@ func (e *Extractor) tikaOnce(ctx context.Context, content []byte, mimeType strin
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPut, e.tikaEndpoint+"/tika/text", bytes.NewReader(content))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPut, e.tikaEndpoint+"/tika", bytes.NewReader(content))
 	if err != nil {
 		return "", false, err
 	}
 	req.Header.Set("Accept", "text/plain")
-	if mimeType != "" {
-		req.Header.Set("Content-Type", mimeType)
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
 	}
+	req.Header.Set("Content-Type", mimeType)
 
 	resp, err := e.httpClient.Do(req)
 	if err != nil {
@@ -162,7 +201,7 @@ func (e *Extractor) tikaOnce(ctx context.Context, content []byte, mimeType strin
 			return "", false, fmt.Errorf("tika did not finish within %s", timeout.Round(time.Second))
 		}
 
-		return "", true, &tikaUnreachableError{endpoint: e.tikaEndpoint, cause: err}
+		return "", true, classifyTikaTransportError(e.tikaEndpoint, err)
 	}
 	defer resp.Body.Close()
 
@@ -192,15 +231,56 @@ func (e *Extractor) tikaOnce(ctx context.Context, content []byte, mimeType strin
 	return string(body), false, nil
 }
 
+// classifyTikaTransportError separates "Tika is not running" (the connection
+// could not be established) from "Tika dropped us mid-request", which is what a
+// large upload looks like when Tika rejects it early or runs out of memory.
+func classifyTikaTransportError(endpoint string, err error) error {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return &tikaUnreachableError{endpoint: endpoint, cause: err}
+	}
+
+	return fmt.Errorf("tika closed the connection while receiving the file (it may have rejected the request or run out of memory): %w", err)
+}
+
 // tikaTimeout scales the allowed extraction time with file size: two minutes
-// plus one minute per 5 MB, capped at 30 minutes.
+// plus 30 seconds per MB, capped at 45 minutes. (A 32 MB, 1,100-page textbook
+// takes Tika around four and a half minutes.)
 func tikaTimeout(sizeBytes int) time.Duration {
-	timeout := tikaMinTimeout + time.Duration(sizeBytes/(5*1024*1024))*time.Minute
+	timeout := tikaMinTimeout + time.Duration(sizeBytes/(1024*1024))*tikaPerMB
 	if timeout > tikaMaxTimeout {
 		return tikaMaxTimeout
 	}
 
 	return timeout
+}
+
+// extractPDFWithPoppler runs pdftotext when it is installed. The bool reports
+// whether the tool is available at all, so callers can fall back to Tika.
+func extractPDFWithPoppler(ctx context.Context, localPath string) (string, bool, error) {
+	binary, err := exec.LookPath(pdfToTextBinary)
+	if err != nil {
+		return "", false, nil
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, pdfToTextTimeout)
+	defer cancel()
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(runCtx, binary, "-enc", "UTF-8", localPath, "-")
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		message := strings.TrimSpace(stderr.String())
+		if len(message) > 200 {
+			message = message[:200]
+		}
+
+		return "", true, fmt.Errorf("pdftotext failed: %v: %s", err, message)
+	}
+
+	return stdout.String(), true, nil
 }
 
 func readTextFile(path string) (string, error) {

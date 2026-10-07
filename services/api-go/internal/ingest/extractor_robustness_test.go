@@ -3,6 +3,8 @@ package ingest
 import (
 	"archive/zip"
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +17,8 @@ import (
 
 func init() {
 	tikaRetryBase = 0
+	// Keep tests independent of whether poppler happens to be installed.
+	pdfToTextBinary = "pdftotext-not-installed-for-tests"
 }
 
 func writeFile(t *testing.T, name string, content []byte) string {
@@ -269,10 +273,136 @@ func TestTikaTimeoutScalesWithFileSizeAndIsCapped(t *testing.T) {
 	if got := tikaTimeout(0); got != 2*time.Minute {
 		t.Fatalf("small file: %v", got)
 	}
-	if got := tikaTimeout(50 * 1024 * 1024); got != 12*time.Minute {
-		t.Fatalf("50MB file: %v", got)
+	// A 32 MB textbook took Tika 4.5 minutes; the allowance must clear that easily.
+	if got := tikaTimeout(32 * 1024 * 1024); got < 15*time.Minute {
+		t.Fatalf("32MB file gets too little time: %v", got)
 	}
-	if got := tikaTimeout(5 * 1024 * 1024 * 1024); got != 30*time.Minute {
+	if got := tikaTimeout(5 * 1024 * 1024 * 1024); got != 45*time.Minute {
 		t.Fatalf("huge file should be capped: %v", got)
+	}
+}
+
+func TestTikaRequestShapeMatchesWhatRealTikaAccepts(t *testing.T) {
+	// Real Tika answers 406 to "/tika/text" with "Accept: text/plain", and returns
+	// nothing useful when no Content-Type is sent.
+	path := writeFile(t, "mystery.xyz", []byte("some bytes"))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tika" || r.Header.Get("Accept") != "text/plain" {
+			w.WriteHeader(http.StatusNotAcceptable)
+			return
+		}
+		if r.Header.Get("Content-Type") == "" {
+			t.Errorf("a content type must always be sent")
+		}
+		_, _ = w.Write([]byte("ok text"))
+	}))
+	defer server.Close()
+
+	text, err := NewExtractor(server.URL).ExtractText(context.Background(), path, "xyz")
+	if err != nil || text != "ok text" {
+		t.Fatalf("text=%q err=%v", text, err)
+	}
+}
+
+func TestDroppedConnectionIsNotReportedAsTikaBeingDown(t *testing.T) {
+	endpoint := "http://127.0.0.1:9998"
+
+	dial := classifyTikaTransportError(endpoint, &net.OpError{Op: "dial", Err: errors.New("connection refused")})
+	var unreachable *tikaUnreachableError
+	if !errors.As(dial, &unreachable) || !strings.Contains(dial.Error(), "make dev-db-up") {
+		t.Fatalf("a refused connection means Tika is not running: %v", dial)
+	}
+
+	// This is the failure seen with a 32 MB PDF: Tika replied early and closed.
+	write := classifyTikaTransportError(endpoint, &net.OpError{Op: "write", Err: errors.New("broken pipe")})
+	if errors.As(write, &unreachable) || strings.Contains(write.Error(), "make dev-db-up") {
+		t.Fatalf("a mid-upload drop must not claim Tika is down: %v", write)
+	}
+	if !strings.Contains(write.Error(), "closed the connection") {
+		t.Fatalf("unhelpful message: %v", write)
+	}
+}
+
+func writeFakePDFToText(t *testing.T, script string) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "pdftotext")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+		t.Fatalf("write fake pdftotext: %v", err)
+	}
+
+	previous := pdfToTextBinary
+	pdfToTextBinary = path
+	t.Cleanup(func() { pdfToTextBinary = previous })
+}
+
+func neverCalledTika(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Errorf("tika must not be called when pdftotext succeeds")
+	}))
+	t.Cleanup(server.Close)
+
+	return server
+}
+
+func TestPDFsPreferPopplerWhenInstalled(t *testing.T) {
+	writeFakePDFToText(t, `echo "text from poppler"`)
+	path := writeFile(t, "book.pdf", []byte("%PDF-1.4 fake"))
+
+	text, err := NewExtractor(neverCalledTika(t).URL).ExtractText(context.Background(), path, "pdf")
+	if err != nil || strings.TrimSpace(text) != "text from poppler" {
+		t.Fatalf("text=%q err=%v", text, err)
+	}
+
+	// Also works with no Tika configured at all.
+	text, err = NewExtractor("").ExtractText(context.Background(), path, "pdf")
+	if err != nil || strings.TrimSpace(text) != "text from poppler" {
+		t.Fatalf("without tika: text=%q err=%v", text, err)
+	}
+}
+
+func TestPDFFallsBackToTikaWhenPopplerFailsAndJoinsHyphenatedWords(t *testing.T) {
+	writeFakePDFToText(t, `echo "Syntax Error: Couldn't read xref" >&2; exit 1`)
+	path := writeFile(t, "book.pdf", []byte("%PDF-1.4 fake"))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("a good exam-\nple of Berke-\nley and well-known facts, first-class"))
+	}))
+	defer server.Close()
+
+	text, err := NewExtractor(server.URL).ExtractText(context.Background(), path, "pdf")
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if !strings.Contains(text, "example of Berkeley") || !strings.Contains(text, "well-known") {
+		t.Fatalf("hyphenation handling wrong: %q", text)
+	}
+}
+
+func TestPopplerAndTikaFailuresAreBothReported(t *testing.T) {
+	writeFakePDFToText(t, `echo "Incorrect password" >&2; exit 1`)
+	path := writeFile(t, "locked.pdf", []byte("%PDF-1.4 fake"))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+	}))
+	defer server.Close()
+
+	_, err := NewExtractor(server.URL).ExtractText(context.Background(), path, "pdf")
+	if err == nil || !strings.Contains(err.Error(), "Incorrect password") || !strings.Contains(err.Error(), "422") {
+		t.Fatalf("both reasons should be visible: %v", err)
+	}
+}
+
+func TestScannedPDFWithPopplerGetsOCRHint(t *testing.T) {
+	writeFakePDFToText(t, `printf '\f\f'`)
+	path := writeFile(t, "scan.pdf", []byte("%PDF-1.4 fake"))
+
+	_, err := NewExtractor("").ExtractText(context.Background(), path, "pdf")
+	if err == nil || !strings.Contains(err.Error(), "OCR") {
+		t.Fatalf("expected an OCR hint, got %v", err)
 	}
 }

@@ -143,7 +143,7 @@ func (s *PostgresStore) resolveDuplicate(ctx context.Context, input CreateInput)
 
 func (s *PostgresStore) Get(ctx context.Context, documentID string) (Document, bool) {
 	const query = `
-select id, project_id, source_path, source_hash, format, title, ingest_status, progress, created_at, updated_at
+select id, project_id, source_path, source_hash, format, title, ingest_status, progress, created_at, updated_at, coalesce(ingest_error, '')
 from documents
 where id = $1
 `
@@ -160,6 +160,7 @@ where id = $1
 		&doc.Progress,
 		&doc.CreatedAt,
 		&doc.UpdatedAt,
+		&doc.Error,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Document{}, false
@@ -173,7 +174,7 @@ where id = $1
 
 func (s *PostgresStore) ListByProject(ctx context.Context, projectID string) ([]Document, error) {
 	const query = `
-select id, project_id, source_path, source_hash, format, title, ingest_status, progress, created_at, updated_at
+select id, project_id, source_path, source_hash, format, title, ingest_status, progress, created_at, updated_at, coalesce(ingest_error, '')
 from documents
 where project_id = $1
 order by created_at desc
@@ -199,6 +200,7 @@ order by created_at desc
 			&doc.Progress,
 			&doc.CreatedAt,
 			&doc.UpdatedAt,
+			&doc.Error,
 		); err != nil {
 			return nil, err
 		}
@@ -555,7 +557,12 @@ func (s *PostgresStore) RunPipeline(ctx context.Context, documentID string) {
 	if err != nil {
 		log.Printf("pipeline failed for document %s: %v", documentID, err)
 		s.markFailed(context.Background(), documentID, err.Error())
-		s.publishDocumentStatus(document.ID, document.ProjectID, "failed", document.Progress, err.Error())
+
+		progress := document.Progress
+		if current, ok := s.Get(context.Background(), documentID); ok {
+			progress = current.Progress
+		}
+		s.publishDocumentStatus(document.ID, document.ProjectID, "failed", progress, err.Error())
 	}
 }
 
@@ -584,6 +591,9 @@ func (s *PostgresStore) runIngestionPipeline(ctx context.Context, document Docum
 
 	content, err := s.extractor.ExtractText(ctx, document.LocalPath, document.Format)
 	if err != nil {
+		failedAt := time.Now().UTC()
+		_ = s.recordStageJob(ctx, document.ID, stageOrder[0], "failed", err.Error(), stageStart, failedAt)
+		s.publishStageFailed(document.ID, document.ProjectID, stageOrder[0], stageProgress(0), err.Error(), stageStart, failedAt)
 		return err
 	}
 	if err := s.recordStageJob(ctx, document.ID, stageOrder[0], "completed", "loaded source text", stageStart, time.Now().UTC()); err != nil {
@@ -866,6 +876,14 @@ func copyTokens(ctx context.Context, tx pgx.Tx, documentID string, tokens []*nlp
 }
 
 func (s *PostgresStore) aggregateConcordance(ctx context.Context, documentID string) error {
+	// Freshly bulk-inserted rows have no planner statistics, which can turn the
+	// KWIC join below into a nested loop that runs for many minutes on a book.
+	for _, table := range []string{"tokens", "sentences"} {
+		if _, err := s.pool.Exec(ctx, "analyze "+table); err != nil {
+			return err
+		}
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -907,6 +925,10 @@ select
   jsonb_build_object('termFrequency', total_freq)
 from lemma_totals
 `, documentID); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, `analyze concordance_terms`); err != nil {
 		return err
 	}
 

@@ -39,11 +39,14 @@ func TestExtractTextUsesTikaForBinaryFormats(t *testing.T) {
 		if r.Method != http.MethodPut {
 			t.Fatalf("unexpected method: got=%s", r.Method)
 		}
-		if r.URL.Path != "/tika/text" {
+		if r.URL.Path != "/tika" {
 			t.Fatalf("unexpected path: got=%s", r.URL.Path)
 		}
 		if got := r.Header.Get("Content-Type"); got != "application/pdf" {
 			t.Fatalf("unexpected content type: got=%s", got)
+		}
+		if got := r.Header.Get("Accept"); got != "text/plain" {
+			t.Fatalf("tika answers 406 unless Accept is text/plain: got=%s", got)
 		}
 		_, _ = w.Write([]byte("extracted from tika"))
 	}))

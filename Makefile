@@ -13,7 +13,7 @@ test-go:
 
 .PHONY: test-go-integration
 test-go-integration:
-	cd $(GO_SERVICE) && TEST_DATABASE_URL=$$TEST_DATABASE_URL go test -p 1 ./... -run 'PostgresStore|ProjectUploadStatusFlow'
+	cd $(GO_SERVICE) && TEST_DATABASE_URL=$$TEST_DATABASE_URL go test -p 1 ./... -run 'PostgresStore|ProjectUploadStatusFlow|LargeDocument|DuplicateUpload|MessyEncodings'
 
 .PHONY: check-py
 check-py:

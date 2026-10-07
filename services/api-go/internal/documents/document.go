@@ -11,6 +11,7 @@ type Document struct {
 	Format     string    `json:"format"`
 	Status     string    `json:"status"`
 	Progress   float64   `json:"progress"`
+	Error      string    `json:"error,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
