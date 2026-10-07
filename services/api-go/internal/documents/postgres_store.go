@@ -337,8 +337,6 @@ where ko.document_id = $1
   and ($2 = '' or ct.lemma ilike '%' || $2 || '%')
   and ($3 = '' or coalesce(ko.page_ref, '') = $3)
   and ($4 = '' or ko.section_id::text = $4)
-limit $5
-offset $6
 `
 
 	limit := filter.Limit
