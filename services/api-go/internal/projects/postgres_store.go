@@ -2,9 +2,11 @@ package projects
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -74,4 +76,44 @@ order by created_at desc
 	}
 
 	return projects, nil
+}
+
+func (s *PostgresStore) Update(ctx context.Context, id string, input UpdateProjectInput) (Project, bool, error) {
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return Project{}, false, ErrInvalidName
+	}
+	if _, err := uuid.Parse(id); err != nil {
+		return Project{}, false, nil
+	}
+
+	var project Project
+	err := s.pool.QueryRow(ctx, `
+update projects set name = $2, description = $3, updated_at = now()
+where id = $1
+returning id, name, coalesce(description, ''), created_at, updated_at
+`, id, name, strings.TrimSpace(input.Description)).Scan(
+		&project.ID, &project.Name, &project.Description, &project.CreatedAt, &project.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Project{}, false, nil
+	}
+	if err != nil {
+		return Project{}, false, err
+	}
+
+	return project, true, nil
+}
+
+// Delete removes the project; its documents and their analysis cascade.
+func (s *PostgresStore) Delete(ctx context.Context, id string) (bool, error) {
+	if _, err := uuid.Parse(id); err != nil {
+		return false, nil
+	}
+	tag, err := s.pool.Exec(ctx, `delete from projects where id = $1`, id)
+	if err != nil {
+		return false, err
+	}
+
+	return tag.RowsAffected() > 0, nil
 }

@@ -96,12 +96,19 @@ func wordTokens(sentence *nlpv1.SentenceInput) []*nlpv1.Token {
 		}
 
 		surface := text[start:i]
+		lemma, pos := strings.ToLower(strings.Trim(surface, ".,;!?")), "X"
+		switch lemma {
+		case "runs", "ran", "running":
+			lemma, pos = "run", "VERB"
+		case "cat", "cats", "dog", "dogs":
+			lemma, pos = strings.TrimSuffix(lemma, "s"), "NOUN"
+		}
 		tokens = append(tokens, &nlpv1.Token{
 			SentenceId: sentence.SentenceId,
 			TokenIndex: int32(index),
 			Surface:    surface,
-			Lemma:      strings.ToLower(strings.Trim(surface, ".,;!?")),
-			Pos:        "X",
+			Lemma:      lemma,
+			Pos:        pos,
 			StartChar:  sentence.StartChar + int64(start),
 			EndChar:    sentence.StartChar + int64(i),
 		})

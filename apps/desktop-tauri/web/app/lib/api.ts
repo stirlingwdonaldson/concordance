@@ -1,8 +1,12 @@
 import type {
+  ComparePage,
   ConcordanceTerm,
   Document,
+  DocumentStats,
   Health,
-  KWICListPayload,
+  KWICOccurrence,
+  POSCount,
+  Page,
   PipelineJob,
   Project,
 } from "./types";
@@ -10,193 +14,185 @@ import type {
 export const apiBase =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8080";
 
-type OnError = (context: string, error: unknown) => void;
-
-export async function fetchHealth(onError: OnError): Promise<Health | null> {
-  try {
-    const response = await fetch(`${apiBase}/ready`);
-    if (!response.ok) {
-      return null;
-    }
-    return (await response.json()) as Health;
-  } catch (error) {
-    onError("Unable to load health state.", error);
-    return null;
+/** An error with a message that is safe to show to the person using the app. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
   }
 }
 
-export async function fetchProjects(
-  onError: OnError,
-): Promise<Project[] | null> {
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  signal?: AbortSignal,
+): Promise<T> {
+  let response: Response;
   try {
-    const response = await fetch(`${apiBase}/api/projects`);
-    if (!response.ok) {
-      return null;
-    }
-    const payload = (await response.json()) as { items: Project[] };
-    return payload.items;
+    response = await fetch(`${apiBase}${path}`, { ...init, signal });
   } catch (error) {
-    onError("Unable to load projects.", error);
-    return null;
-  }
-}
-
-export async function fetchDocuments(
-  projectId: string,
-  onError: OnError,
-): Promise<Document[] | null> {
-  try {
-    const response = await fetch(
-      `${apiBase}/api/projects/${projectId}/documents`,
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw error;
+    }
+    throw new ApiError(
+      `Can't reach the Concordance API at ${apiBase}. Is it running?`,
+      0,
     );
-    if (!response.ok) {
-      return null;
-    }
-    const payload = (await response.json()) as { items: Document[] };
-    return payload.items;
-  } catch (error) {
-    onError("Unable to load documents.", error);
-    return null;
   }
+
+  if (!response.ok) {
+    let message = `Request failed (${response.status}).`;
+    try {
+      const body = (await response.json()) as { error?: string };
+      if (body.error) {
+        message = body.error.charAt(0).toUpperCase() + body.error.slice(1);
+      }
+    } catch {
+      // keep the generic message
+    }
+    throw new ApiError(message, response.status);
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return (await response.json()) as T;
 }
 
-export async function fetchPipelineJobs(
-  documentId: string,
-  onError: OnError,
-): Promise<PipelineJob[] | null> {
-  try {
-    const response = await fetch(
-      `${apiBase}/api/documents/${documentId}/pipeline-jobs`,
-    );
-    if (!response.ok) {
-      return null;
+const json = (method: string, body: unknown): RequestInit => ({
+  method,
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+function query(params: Record<string, string | number | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") {
+      search.set(key, String(value));
     }
-    const payload = (await response.json()) as { items: PipelineJob[] };
-    return payload.items;
-  } catch (error) {
-    onError("Unable to load pipeline jobs.", error);
-    return null;
   }
+  const text = search.toString();
+  return text === "" ? "" : `?${text}`;
 }
 
-export async function fetchConcordance(
-  documentId: string,
-  lemma: string,
-  pos: string,
-  onError: OnError,
-): Promise<ConcordanceTerm[] | null> {
-  const query = new URLSearchParams();
-  if (lemma.trim() !== "") {
-    query.set("lemma", lemma.trim());
-  }
-  if (pos.trim() !== "") {
-    query.set("pos", pos.trim());
-  }
-
-  try {
-    const response = await fetch(
-      `${apiBase}/api/documents/${documentId}/concordance?${query.toString()}`,
-    );
-    if (!response.ok) {
-      return null;
-    }
-    const payload = (await response.json()) as { items: ConcordanceTerm[] };
-    return payload.items;
-  } catch (error) {
-    onError("Unable to load concordance.", error);
-    return null;
-  }
+/** A URL the browser can open directly, used for CSV downloads. */
+export function exportUrl(
+  path: string,
+  params: Record<string, string | number | undefined> = {},
+): string {
+  return `${apiBase}${path}${query(params)}`;
 }
 
-export interface KWICQueryParams {
-  lemma: string;
-  rawLimit: string;
-  sortBy: string;
-  sortDir: string;
+export type KwicParams = {
+  lemma?: string;
+  pos?: string;
+  sort?: string;
+  dir?: string;
+  limit: number;
   offset: number;
-}
+};
 
-export async function fetchKWIC(
-  documentId: string,
-  params: KWICQueryParams,
-  onError: OnError,
-): Promise<KWICListPayload | null> {
-  const query = new URLSearchParams();
-  if (params.lemma.trim() !== "") {
-    query.set("lemma", params.lemma.trim());
-  }
+export type CompareParams = {
+  against: string;
+  side?: string;
+  pos?: string;
+  lemma?: string;
+  min?: number;
+  limit: number;
+  offset: number;
+};
 
-  const limit = Number.parseInt(params.rawLimit, 10);
-  if (!Number.isNaN(limit) && limit > 0) {
-    query.set("limit", String(limit));
-  }
-  query.set("sort", params.sortBy);
-  query.set("dir", params.sortDir);
-  query.set("offset", String(Math.max(0, params.offset)));
+export const api = {
+  health: (signal?: AbortSignal) =>
+    request<Health>("/ready", undefined, signal),
 
-  try {
-    const response = await fetch(
-      `${apiBase}/api/documents/${documentId}/kwic?${query.toString()}`,
-    );
-    if (!response.ok) {
-      return null;
-    }
-    return (await response.json()) as KWICListPayload;
-  } catch (error) {
-    onError("Unable to load KWIC occurrences.", error);
-    return null;
-  }
-}
+  listProjects: (signal?: AbortSignal) =>
+    request<{ items: Project[] }>("/api/projects", undefined, signal).then(
+      (r) => r.items,
+    ),
+  createProject: (name: string, description = "") =>
+    request<Project>("/api/projects", json("POST", { name, description })),
+  updateProject: (id: string, name: string, description = "") =>
+    request<Project>(
+      `/api/projects/${id}`,
+      json("PATCH", { name, description }),
+    ),
+  deleteProject: (id: string) =>
+    request<void>(`/api/projects/${id}`, { method: "DELETE" }),
 
-export async function createProjectRequest(
-  name: string,
-  onError: OnError,
-): Promise<boolean> {
-  try {
-    const response = await fetch(`${apiBase}/api/projects`, {
+  listDocuments: (projectId: string, signal?: AbortSignal) =>
+    request<{ items: Document[] }>(
+      `/api/projects/${projectId}/documents`,
+      undefined,
+      signal,
+    ).then((r) => r.items),
+  uploadDocument: (projectId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<Document>(`/api/projects/${projectId}/documents/upload`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: form,
     });
-    return response.ok;
-  } catch (error) {
-    onError("Unable to create project.", error);
-    return false;
-  }
-}
+  },
+  renameDocument: (id: string, fileName: string) =>
+    request<Document>(`/api/documents/${id}`, json("PATCH", { fileName })),
+  deleteDocument: (id: string) =>
+    request<void>(`/api/documents/${id}`, { method: "DELETE" }),
+  retryDocument: (id: string) =>
+    request<Document>(`/api/documents/${id}/retry`, { method: "POST" }),
+  documentStatus: (id: string, signal?: AbortSignal) =>
+    request<Document>(`/api/documents/${id}/status`, undefined, signal),
+  documentStats: (id: string, signal?: AbortSignal) =>
+    request<DocumentStats>(`/api/documents/${id}/stats`, undefined, signal),
+  pipelineJobs: (id: string, signal?: AbortSignal) =>
+    request<{ items: PipelineJob[] }>(
+      `/api/documents/${id}/pipeline-jobs`,
+      undefined,
+      signal,
+    ).then((r) => r.items),
 
-export async function uploadDocumentRequest(
-  projectId: string,
-  file: File,
-  onError: OnError,
-): Promise<boolean> {
-  const formData = new FormData();
-  formData.append("file", file);
-
-  try {
-    const response = await fetch(
-      `${apiBase}/api/projects/${projectId}/documents/upload`,
-      { method: "POST", body: formData },
-    );
-    return response.ok;
-  } catch (error) {
-    onError("Upload failed.", error);
-    return false;
-  }
-}
-
-export async function retryDocumentRequest(
-  documentId: string,
-  onError: OnError,
-): Promise<boolean> {
-  try {
-    const response = await fetch(
-      `${apiBase}/api/documents/${documentId}/retry`,
-      { method: "POST" },
-    );
-    return response.ok;
-  } catch (error) {
-    onError("Retry failed.", error);
-    return false;
-  }
-}
+  partsOfSpeech: (id: string, signal?: AbortSignal) =>
+    request<{ items: POSCount[] }>(
+      `/api/documents/${id}/pos`,
+      undefined,
+      signal,
+    ).then((r) => r.items),
+  compare: (id: string, params: CompareParams, signal?: AbortSignal) =>
+    request<ComparePage>(
+      `/api/documents/${id}/compare${query(params)}`,
+      undefined,
+      signal,
+    ),
+  projectKwic: (projectId: string, params: KwicParams, signal?: AbortSignal) =>
+    request<Page<KWICOccurrence>>(
+      `/api/projects/${projectId}/kwic${query(params)}`,
+      undefined,
+      signal,
+    ),
+  concordance: (
+    id: string,
+    params: {
+      lemma?: string;
+      pos?: string;
+      sort?: string;
+      dir?: string;
+      limit: number;
+      offset: number;
+    },
+    signal?: AbortSignal,
+  ) =>
+    request<Page<ConcordanceTerm>>(
+      `/api/documents/${id}/concordance${query(params)}`,
+      undefined,
+      signal,
+    ),
+  kwic: (id: string, params: KwicParams, signal?: AbortSignal) =>
+    request<Page<KWICOccurrence>>(
+      `/api/documents/${id}/kwic${query(params)}`,
+      undefined,
+      signal,
+    ),
+};

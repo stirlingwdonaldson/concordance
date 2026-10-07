@@ -59,3 +59,40 @@ func randomID() string {
 
 	return hex.EncodeToString(b)
 }
+
+func (s *MemoryStore) Update(_ context.Context, id string, input UpdateProjectInput) (Project, bool, error) {
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return Project{}, false, ErrInvalidName
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.projects {
+		if s.projects[i].ID == id {
+			s.projects[i].Name = name
+			s.projects[i].Description = strings.TrimSpace(input.Description)
+			s.projects[i].UpdatedAt = time.Now().UTC()
+
+			return s.projects[i], true, nil
+		}
+	}
+
+	return Project{}, false, nil
+}
+
+func (s *MemoryStore) Delete(_ context.Context, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.projects {
+		if s.projects[i].ID == id {
+			s.projects = append(s.projects[:i], s.projects[i+1:]...)
+
+			return true, nil
+		}
+	}
+
+	return false, nil
+}

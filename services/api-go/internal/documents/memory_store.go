@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"strings"
 	"sync"
 	"time"
 )
@@ -203,4 +204,61 @@ func randomID() string {
 	_, _ = rand.Read(b)
 
 	return hex.EncodeToString(b)
+}
+
+func (s *MemoryStore) CountConcordance(_ context.Context, _ string, _ ConcordanceFilter) (int, error) {
+	return 0, nil
+}
+
+func (s *MemoryStore) Stats(_ context.Context, _ string) (Stats, error) {
+	return Stats{}, nil
+}
+
+func (s *MemoryStore) Rename(_ context.Context, documentID, fileName string) (Document, bool, error) {
+	fileName = strings.TrimSpace(fileName)
+	if fileName == "" {
+		return Document{}, false, ErrInvalidFileName
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	doc, ok := s.documents[documentID]
+	if !ok {
+		return Document{}, false, nil
+	}
+	doc.FileName = fileName
+	doc.UpdatedAt = time.Now().UTC()
+	s.documents[documentID] = doc
+
+	return doc, true, nil
+}
+
+func (s *MemoryStore) Delete(_ context.Context, documentID string) (Document, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	doc, ok := s.documents[documentID]
+	if !ok {
+		return Document{}, false, nil
+	}
+	delete(s.documents, documentID)
+
+	return doc, true, nil
+}
+
+func (s *MemoryStore) PartsOfSpeech(_ context.Context, _ string) ([]POSCount, error) {
+	return []POSCount{}, nil
+}
+
+func (s *MemoryStore) ListProjectKWIC(_ context.Context, _ string, _ KWICFilter) ([]KWICOccurrence, error) {
+	return []KWICOccurrence{}, nil
+}
+
+func (s *MemoryStore) CountProjectKWIC(_ context.Context, _ string, _ KWICFilter) (int, error) {
+	return 0, nil
+}
+
+func (s *MemoryStore) Keyness(_ context.Context, _ string, _ KeynessFilter) ([]KeyTerm, int, error) {
+	return []KeyTerm{}, 0, nil
 }

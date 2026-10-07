@@ -47,6 +47,20 @@ type ConcordanceFilter struct {
 	Lemma   string
 	POS     string
 	Section string
+	// Limit <= 0 means "no limit" so existing callers keep their behaviour.
+	Limit   int
+	Offset  int
+	SortBy  string // "freq" (default) or "lemma"
+	SortDir string // "asc" or "desc"; default depends on SortBy
+}
+
+// Stats summarises what the pipeline extracted from one document.
+type Stats struct {
+	Passages  int `json:"passages"`
+	Sentences int `json:"sentences"`
+	Tokens    int `json:"tokens"`
+	Terms     int `json:"terms"`
+	Hapax     int `json:"hapax"`
 }
 
 type ConcordanceTerm struct {
@@ -59,6 +73,7 @@ type ConcordanceTerm struct {
 
 type KWICFilter struct {
 	Lemma   string
+	POS     string
 	Page    string
 	Section string
 	Limit   int
@@ -77,6 +92,39 @@ type KWICOccurrence struct {
 	RightContext string `json:"rightContext"`
 	SectionID    string `json:"sectionId,omitempty"`
 	PageRef      string `json:"pageRef,omitempty"`
+	POS          string `json:"pos,omitempty"`
+	DocumentID   string `json:"documentId,omitempty"`
+	DocumentName string `json:"documentName,omitempty"`
+}
+
+// POSCount is how many tokens in a document carry one part-of-speech tag.
+type POSCount struct {
+	POS   string `json:"pos"`
+	Count int    `json:"count"`
+}
+
+// KeynessFilter selects which words stand out between two documents.
+type KeynessFilter struct {
+	Against string // the reference document
+	POS     string
+	Lemma   string
+	// Side is "a" (overused in the first document), "b" (overused in the
+	// reference) or "" for both.
+	Side    string
+	MinFreq int // minimum combined count; filters out noise
+	Limit   int
+	Offset  int
+}
+
+// KeyTerm compares one word's use in two documents.
+type KeyTerm struct {
+	Lemma       string  `json:"lemma"`
+	FreqA       int     `json:"freqA"`
+	FreqB       int     `json:"freqB"`
+	PerMillionA float64 `json:"perMillionA"`
+	PerMillionB float64 `json:"perMillionB"`
+	Score       float64 `json:"score"` // log-likelihood (G2)
+	Side        string  `json:"side"`  // "a" or "b": where the word is more frequent
 }
 
 type JobStage struct {

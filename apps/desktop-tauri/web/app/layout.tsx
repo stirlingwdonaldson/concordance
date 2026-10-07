@@ -1,17 +1,12 @@
+import "@fontsource-variable/schibsted-grotesk";
+import "@fontsource-variable/newsreader";
 import "./styles.css";
 import type { Metadata } from "next";
-import { Fraunces, Source_Sans_3 } from "next/font/google";
 import type { ReactNode } from "react";
-
-const displayFont = Fraunces({
-  subsets: ["latin"],
-  variable: "--font-display",
-});
-const bodyFont = Source_Sans_3({ subsets: ["latin"], variable: "--font-body" });
 
 export const metadata: Metadata = {
   title: "Concordance",
-  description: "Local literary concordance and textual analysis",
+  description: "See how words are used across the books and reports you read.",
 };
 
 export default function RootLayout({
@@ -19,9 +14,7 @@ export default function RootLayout({
 }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="en">
-      <body className={`${displayFont.variable} ${bodyFont.variable}`}>
-        {children}
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

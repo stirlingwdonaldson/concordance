@@ -327,29 +327,42 @@ order by started_at asc
 	return jobs, nil
 }
 
-func (s *PostgresStore) ListConcordance(ctx context.Context, documentID string, filter ConcordanceFilter) ([]ConcordanceTerm, error) {
-	const query = `
-select id, lemma, normalized_form, total_freq, hapax
-from concordance_terms ct
+const concordanceWhere = `
 where ct.document_id = $1
-  and ($2 = '' or ct.lemma ilike '%' || $2 || '%')
-  and ($3 = '' or exists (
-    select 1
-    from tokens t
-    where t.document_id = ct.document_id
-      and t.lemma = ct.lemma
-      and coalesce(t.pos, '') = $3
-  ))
+  and ($2 = '' or ct.lemma ilike '%' || $2 || '%' escape '\')
+  and ($3 = '' or jsonb_exists(ct.pos_distribution, $3))
   and ($4 = '' or exists (
     select 1
     from kwic_occurrences ko
     where ko.term_id = ct.id
       and ko.section_id::text = $4
   ))
-order by total_freq desc, lemma asc
 `
 
-	rows, err := s.pool.Query(ctx, query, documentID, strings.TrimSpace(filter.Lemma), strings.TrimSpace(filter.POS), strings.TrimSpace(filter.Section))
+func concordanceOrder(sortBy, sortDir string) string {
+	dir := strings.ToLower(strings.TrimSpace(sortDir))
+	if strings.EqualFold(strings.TrimSpace(sortBy), "lemma") {
+		if dir == "desc" {
+			return "lemma desc"
+		}
+		return "lemma asc"
+	}
+	if dir == "asc" {
+		return "total_freq asc, lemma asc"
+	}
+	return "total_freq desc, lemma asc"
+}
+
+func (s *PostgresStore) ListConcordance(ctx context.Context, documentID string, filter ConcordanceFilter) ([]ConcordanceTerm, error) {
+	query := `select id, lemma, normalized_form, total_freq, hapax from concordance_terms ct` +
+		concordanceWhere + ` order by ` + concordanceOrder(filter.SortBy, filter.SortDir)
+	args := []any{documentID, escapeLike(strings.TrimSpace(filter.Lemma)), strings.TrimSpace(filter.POS), strings.TrimSpace(filter.Section)}
+	if filter.Limit > 0 {
+		query += ` limit $5 offset $6`
+		args = append(args, filter.Limit, max(filter.Offset, 0))
+	}
+
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -372,116 +385,60 @@ order by total_freq desc, lemma asc
 	return items, nil
 }
 
-func (s *PostgresStore) ListKWIC(ctx context.Context, documentID string, filter KWICFilter) ([]KWICOccurrence, error) {
-	baseQuery := `
-select ko.id, ko.term_id, ct.lemma, ko.sentence_id, ko.left_context, ko.keyword, ko.right_context, coalesce(ko.section_id::text, ''), coalesce(ko.page_ref, '')
-from kwic_occurrences ko
-join concordance_terms ct on ct.id = ko.term_id
-where ko.document_id = $1
-  and ($2 = '' or ct.lemma ilike '%' || $2 || '%')
-  and ($3 = '' or coalesce(ko.page_ref, '') = $3)
-  and ($4 = '' or ko.section_id::text = $4)
-`
-
-	limit := filter.Limit
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 500 {
-		limit = 500
-	}
-
-	offset := filter.Offset
-	if offset < 0 {
-		offset = 0
-	}
-
-	query := fmt.Sprintf("%s order by %s limit $5 offset $6", strings.TrimSpace(baseQuery), kwicOrderClause(filter.SortBy, filter.SortDir))
-
-	rows, err := s.pool.Query(
-		ctx,
-		query,
-		documentID,
-		strings.TrimSpace(filter.Lemma),
-		strings.TrimSpace(filter.Page),
-		strings.TrimSpace(filter.Section),
-		limit,
-		offset,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	items := make([]KWICOccurrence, 0)
-	for rows.Next() {
-		var item KWICOccurrence
-		if err := rows.Scan(
-			&item.ID,
-			&item.TermID,
-			&item.Lemma,
-			&item.SentenceID,
-			&item.LeftContext,
-			&item.Keyword,
-			&item.RightContext,
-			&item.SectionID,
-			&item.PageRef,
-		); err != nil {
-			return nil, err
-		}
-
-		items = append(items, item)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return items, nil
-}
-
-func kwicOrderClause(sortBy, sortDir string) string {
-	direction := "asc"
-	if strings.EqualFold(strings.TrimSpace(sortDir), "desc") {
-		direction = "desc"
-	}
-
-	column := "ko.id"
-	switch strings.ToLower(strings.TrimSpace(sortBy)) {
-	case "lemma":
-		column = "ct.lemma"
-	case "keyword":
-		column = "ko.keyword"
-	}
-
-	return fmt.Sprintf("%s %s, ko.id %s", column, direction, direction)
-}
-
-func (s *PostgresStore) CountKWIC(ctx context.Context, documentID string, filter KWICFilter) (int, error) {
-	const query = `
-select count(*)
-from kwic_occurrences ko
-join concordance_terms ct on ct.id = ko.term_id
-where ko.document_id = $1
-  and ($2 = '' or ct.lemma ilike '%' || $2 || '%')
-  and ($3 = '' or coalesce(ko.page_ref, '') = $3)
-  and ($4 = '' or ko.section_id::text = $4)
-`
-
+func (s *PostgresStore) CountConcordance(ctx context.Context, documentID string, filter ConcordanceFilter) (int, error) {
 	var total int
-	err := s.pool.QueryRow(
-		ctx,
-		query,
-		documentID,
-		strings.TrimSpace(filter.Lemma),
-		strings.TrimSpace(filter.Page),
-		strings.TrimSpace(filter.Section),
+	err := s.pool.QueryRow(ctx, `select count(*) from concordance_terms ct`+concordanceWhere,
+		documentID, escapeLike(strings.TrimSpace(filter.Lemma)), strings.TrimSpace(filter.POS), strings.TrimSpace(filter.Section),
 	).Scan(&total)
-	if err != nil {
-		return 0, err
+
+	return total, err
+}
+
+func (s *PostgresStore) Stats(ctx context.Context, documentID string) (Stats, error) {
+	var stats Stats
+	err := s.pool.QueryRow(ctx, `
+select
+  (select count(*) from passages where document_id = $1),
+  (select count(*) from sentences s join passages p on p.id = s.passage_id where p.document_id = $1),
+  (select count(*) from tokens where document_id = $1 and not is_punct),
+  (select count(*) from concordance_terms where document_id = $1),
+  (select count(*) from concordance_terms where document_id = $1 and hapax)
+`, documentID).Scan(&stats.Passages, &stats.Sentences, &stats.Tokens, &stats.Terms, &stats.Hapax)
+
+	return stats, err
+}
+
+func (s *PostgresStore) Rename(ctx context.Context, documentID, fileName string) (Document, bool, error) {
+	fileName = strings.TrimSpace(fileName)
+	if fileName == "" {
+		return Document{}, false, ErrInvalidFileName
 	}
 
-	return total, nil
+	tag, err := s.pool.Exec(ctx, `update documents set title = $2, updated_at = now() where id = $1`, documentID, fileName)
+	if err != nil {
+		return Document{}, false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Document{}, false, nil
+	}
+
+	doc, ok := s.Get(ctx, documentID)
+
+	return doc, ok, nil
+}
+
+// Delete removes the document and, through foreign-key cascades, everything
+// derived from it. The returned document lets callers remove the stored file.
+func (s *PostgresStore) Delete(ctx context.Context, documentID string) (Document, bool, error) {
+	doc, ok := s.Get(ctx, documentID)
+	if !ok {
+		return Document{}, false, nil
+	}
+	if _, err := s.pool.Exec(ctx, `delete from documents where id = $1`, documentID); err != nil {
+		return Document{}, false, err
+	}
+
+	return doc, true, nil
 }
 
 func (s *PostgresStore) Retry(ctx context.Context, documentID string) (Document, bool, error) {
@@ -933,7 +890,7 @@ from lemma_totals
 	}
 
 	if _, err := tx.Exec(ctx, `
-insert into kwic_occurrences (document_id, term_id, sentence_id, left_context, keyword, right_context)
+insert into kwic_occurrences (document_id, term_id, sentence_id, left_context, keyword, right_context, pos)
 select
   t.document_id,
   ct.id,
@@ -950,7 +907,8 @@ select
       greatest((t.end_char - coalesce(s.start_char, 0))::int + 1, 1)
     ),
     50
-  )
+  ),
+  coalesce(nullif(t.pos, ''), 'UNK')
 from tokens t
 join sentences s on s.id = t.sentence_id
 join concordance_terms ct

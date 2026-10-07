@@ -1,301 +1,513 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { ChangeEvent } from "react";
-import { ConcordancePanel } from "./components/concordance-panel";
-import { DocumentsPanel } from "./components/documents-panel";
-import { HealthPanel } from "./components/health-panel";
-import { HeroSection } from "./components/hero-section";
-import { KWICPanel } from "./components/kwic-panel";
-import { PipelinePanel } from "./components/pipeline-panel";
-import { ProjectsPanel } from "./components/projects-panel";
-import { StatusBar } from "./components/status-bar";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Card } from "./components/card";
+import { CompareCard } from "./components/compare-card";
+import { ConfirmDialog, TextDialog } from "./components/dialogs";
+import { GlossaryPanel } from "./components/glossary-panel";
+import { KwicCard } from "./components/kwic-card";
+import { LibraryCard } from "./components/library-card";
+import { Sidebar } from "./components/sidebar";
+import { StatStrip } from "./components/stat-strip";
+import { StepsCard } from "./components/steps-card";
+import { Term } from "./components/term";
+import { ToastProvider, useToasts } from "./components/toasts";
+import { TopWordsCard } from "./components/top-words-card";
+import { UploadCard } from "./components/upload-card";
+import { WordListCard } from "./components/word-list-card";
+import { useAsync } from "./hooks/use-async";
 import { useJobStream } from "./hooks/use-job-stream";
-import {
-  apiBase,
-  createProjectRequest,
-  fetchConcordance,
-  fetchDocuments,
-  fetchHealth,
-  fetchKWIC,
-  fetchPipelineJobs,
-  fetchProjects,
-  retryDocumentRequest,
-  uploadDocumentRequest,
-} from "./lib/api";
+import { api, apiBase } from "./lib/api";
 import { toWebSocketBase } from "./lib/format";
-import type {
-  ConcordanceTerm,
-  Document,
-  Health,
-  KWICOccurrence,
-  PipelineJob,
-  Project,
-} from "./lib/types";
+import { EXAMPLE_PROJECT_NAMES } from "./lib/glossary";
+import type { Document, Health, Project } from "./lib/types";
 
-export default function HomePage() {
-  const [health, setHealth] = useState<Health | null>(null);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectName, setProjectName] = useState("Sample Project");
-  const [selectedProject, setSelectedProject] = useState("");
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [selectedDocument, setSelectedDocument] = useState("");
-  const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([]);
-  const [concordanceTerms, setConcordanceTerms] = useState<ConcordanceTerm[]>(
-    [],
-  );
-  const [kwicRows, setKwicRows] = useState<KWICOccurrence[]>([]);
-  const [kwicTotal, setKWICTotal] = useState(0);
-  const [kwicOffset, setKWICOffset] = useState(0);
-  const [concordanceLemma, setConcordanceLemma] = useState("");
-  const [concordancePOS, setConcordancePOS] = useState("");
-  const [kwicLemma, setKWICLemma] = useState("");
-  const [kwicLimit, setKWICLimit] = useState("50");
-  const [kwicSort, setKWICSort] = useState("position");
-  const [kwicDir, setKWICDir] = useState("asc");
-  const [statusMessage, setStatusMessage] = useState("");
+type Dialogs =
+  | { kind: "none" }
+  | { kind: "create-project" }
+  | { kind: "rename-project"; project: Project }
+  | { kind: "delete-project"; project: Project }
+  | { kind: "rename-doc"; doc: Document }
+  | { kind: "delete-doc"; doc: Document }
+  | { kind: "glossary" };
 
+const IN_FLIGHT = new Set(["queued", "processing", "running"]);
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : "Something went wrong.";
+}
+
+function Dashboard() {
+  const toast = useToasts();
   const wsBase = useMemo(() => toWebSocketBase(apiBase), []);
-  const selectedProjectExists = useMemo(
-    () => projects.some((p) => p.id === selectedProject),
-    [projects, selectedProject],
-  );
+  const [dialog, setDialog] = useState<Dialogs>({ kind: "none" });
+  const [projectId, setProjectId] = useState("");
+  const [docId, setDocId] = useState("");
+  const [word, setWord] = useState("");
+  const contextRef = useRef<HTMLDivElement>(null);
+  // A project we just created and selected, before the list has reloaded to include it.
+  const pendingProject = useRef("");
 
-  function onError(context: string, error: unknown) {
-    const detail = error instanceof Error ? error.message : "Unknown error";
-    setStatusMessage(
-      `${context} Unable to reach API at ${apiBase} (${detail}).`,
-    );
-  }
-
-  // --- data refresh helpers ---
-
-  async function refreshProjects() {
-    const items = await fetchProjects(onError);
-    if (items) {
-      setProjects(items);
-      if (items.length > 0) {
-        setSelectedProject((cur) => cur || items[0].id);
-      }
-    }
-  }
-
-  async function refreshDocuments(projectId: string) {
-    const items = await fetchDocuments(projectId, onError);
-    if (!items) return;
-    setDocuments(items);
-    if (items.length === 0) {
-      setSelectedDocument("");
-      return;
-    }
-    setSelectedDocument((cur) => {
-      const exists = items.some((d) => d.id === cur);
-      return exists ? cur : items[0].id;
-    });
-  }
-
-  async function refreshPipelineJobs(docId: string) {
-    const items = await fetchPipelineJobs(docId, onError);
-    if (items) setPipelineJobs(items);
-  }
-
-  async function refreshConcordanceNow() {
-    if (selectedDocument === "") return;
-    const items = await fetchConcordance(
-      selectedDocument,
-      concordanceLemma,
-      concordancePOS,
-      onError,
-    );
-    if (items) setConcordanceTerms(items);
-  }
-
-  async function refreshKWICNow(offset?: number) {
-    if (selectedDocument === "") return;
-    const payload = await fetchKWIC(
-      selectedDocument,
-      {
-        lemma: kwicLemma,
-        rawLimit: kwicLimit,
-        sortBy: kwicSort,
-        sortDir: kwicDir,
-        offset: offset ?? kwicOffset,
-      },
-      onError,
-    );
-    if (payload) {
-      setKwicRows(payload.items);
-      setKWICTotal(payload.total);
-      setKWICOffset(payload.offset);
-    }
-  }
-
-  // --- effects ---
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only effect
+  // --- health ---
+  const [health, setHealth] = useState<Health | null>(null);
   useEffect(() => {
-    void fetchHealth(onError).then((h) => h && setHealth(h));
-    void refreshProjects();
+    let cancelled = false;
+    const check = () =>
+      api
+        .health()
+        .then((h) => !cancelled && setHealth(h))
+        .catch(() => !cancelled && setHealth(null));
+    void check();
+    const id = window.setInterval(check, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
   }, []);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshDocuments is stable in intent
+  // --- projects ---
+  const projects = useAsync((signal) => api.listProjects(signal), []);
+  const projectList = projects.data ?? [];
   useEffect(() => {
-    if (selectedProject !== "") {
-      void refreshDocuments(selectedProject);
+    if (!projects.data) return;
+    if (projects.data.some((p) => p.id === projectId)) {
+      if (pendingProject.current === projectId) pendingProject.current = "";
+      return;
     }
-  }, [selectedProject]);
+    if (projectId !== "" && pendingProject.current === projectId) return;
+    setProjectId(projects.data[0]?.id ?? "");
+  }, [projects.data, projectId]);
+  const project = projectList.find((p) => p.id === projectId);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh helpers read current state via closure
+  // --- documents (polled while anything is still processing) ---
+  const documents = useAsync(
+    (signal) => api.listDocuments(projectId, signal),
+    [projectId],
+    projectId !== "",
+  );
+  const docList = documents.data ?? [];
+  const reloadDocuments = documents.reload;
+  const anyInFlight = docList.some((d) => IN_FLIGHT.has(d.status));
   useEffect(() => {
-    if (selectedDocument !== "") {
-      void refreshPipelineJobs(selectedDocument);
-      void refreshConcordanceNow();
-      void refreshKWICNow();
-    } else {
-      setPipelineJobs([]);
-      setConcordanceTerms([]);
-      setKwicRows([]);
-      setKWICTotal(0);
-      setKWICOffset(0);
+    if (!anyInFlight) return;
+    const id = window.setInterval(reloadDocuments, 2000);
+    return () => window.clearInterval(id);
+  }, [anyInFlight, reloadDocuments]);
+
+  useEffect(() => {
+    if (!documents.data) return;
+    if (!documents.data.some((d) => d.id === docId)) {
+      setDocId(documents.data[0]?.id ?? "");
     }
-  }, [
-    concordanceLemma,
-    concordancePOS,
-    kwicLemma,
-    kwicLimit,
-    kwicSort,
-    kwicDir,
-    selectedDocument,
-  ]);
+  }, [documents.data, docId]);
+  const doc = docList.find((d) => d.id === docId);
+  const ready = doc?.status === "ready";
+  const readyDocs = docList.filter((d) => d.status === "ready");
 
-  // --- WebSocket stream ---
+  // --- per-document data ---
+  const stats = useAsync(
+    (signal) => api.documentStats(docId, signal),
+    [docId, doc?.status],
+    ready,
+  );
+  const jobs = useAsync(
+    (signal) => api.pipelineJobs(docId, signal),
+    [docId, doc?.status, Math.round((doc?.progress ?? 0) * 20)],
+    doc !== undefined,
+  );
+  const reloadJobs = jobs.reload;
 
-  const { streamState, streamStatusLabel, lastEventLabel, isStreamStale } =
-    useJobStream({
-      documentId: selectedDocument,
-      wsBase,
-      onDocumentStatusUpdate(status, progress) {
-        setDocuments((cur) =>
-          cur.map((d) =>
-            d.id === selectedDocument ? { ...d, status, progress } : d,
-          ),
-        );
-      },
-      onJobsSnapshot(jobs) {
-        setPipelineJobs(jobs);
-      },
-      onStageChange() {
-        void refreshPipelineJobs(selectedDocument);
-        if (selectedProject !== "") {
-          void refreshDocuments(selectedProject);
-        }
-        void refreshConcordanceNow();
-        void refreshKWICNow();
-      },
-      onDocumentReady() {
-        void refreshConcordanceNow();
-        void refreshKWICNow();
-      },
-    });
+  const { streamState } = useJobStream({
+    documentId: docId,
+    wsBase,
+    onDocumentStatusUpdate: reloadDocuments,
+    onJobsSnapshot: () => {},
+    onStageChange: useCallback(() => {
+      reloadJobs();
+      reloadDocuments();
+    }, [reloadJobs, reloadDocuments]),
+    onDocumentReady: reloadDocuments,
+  });
 
   // --- actions ---
+  const close = () => setDialog({ kind: "none" });
 
-  async function handleCreateProject() {
-    const ok = await createProjectRequest(projectName, onError);
-    if (ok) {
-      setStatusMessage("Project created.");
-      await refreshProjects();
+  async function run<T>(action: () => Promise<T>, success?: string) {
+    try {
+      const result = await action();
+      if (success) toast.ok(success);
+      return result;
+    } catch (error) {
+      toast.error(message(error));
+      return undefined;
     }
   }
 
-  async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file || selectedProject === "") return;
-    const ok = await uploadDocumentRequest(selectedProject, file, onError);
-    if (ok) {
-      setStatusMessage("Upload accepted. Refreshing status.");
-      await refreshDocuments(selectedProject);
-      window.setTimeout(() => {
-        void refreshDocuments(selectedProject);
-      }, 800);
+  async function createProject(name: string) {
+    const created = await run(
+      () => api.createProject(name),
+      `Created “${name}”.`,
+    );
+    if (created) {
+      close();
+      pendingProject.current = created.id;
+      setProjectId(created.id);
+      setDocId("");
+      setWord("");
+      projects.reload();
     }
   }
 
-  async function handleRetry() {
-    if (selectedDocument === "") return;
-    const ok = await retryDocumentRequest(selectedDocument, onError);
-    if (ok) {
-      setStatusMessage("Retry queued. Refreshing timeline.");
-      if (selectedProject !== "") await refreshDocuments(selectedProject);
-      await refreshPipelineJobs(selectedDocument);
-      window.setTimeout(() => {
-        if (selectedProject !== "") void refreshDocuments(selectedProject);
-        void refreshPipelineJobs(selectedDocument);
-      }, 800);
+  async function renameProject(target: Project, name: string) {
+    const updated = await run(
+      () => api.updateProject(target.id, name, target.description ?? ""),
+      "Project renamed.",
+    );
+    if (updated) {
+      close();
+      projects.reload();
     }
   }
 
-  // --- render ---
+  async function deleteProject(target: Project) {
+    const done = await run(async () => {
+      await api.deleteProject(target.id);
+      return true;
+    }, `Deleted “${target.name}”.`);
+    if (done) {
+      close();
+      if (target.id === projectId) {
+        setProjectId("");
+        setDocId("");
+      }
+      projects.reload();
+    }
+  }
+
+  async function upload(files: File[]) {
+    let uploaded = 0;
+    for (const file of files) {
+      const created = await run(() => api.uploadDocument(projectId, file));
+      if (created) {
+        uploaded += 1;
+        setDocId((current) => current || created.id);
+      }
+    }
+    if (uploaded > 0) {
+      toast.ok(
+        uploaded === 1
+          ? "File added. Processing has started."
+          : `${uploaded} files added. Processing has started.`,
+      );
+      reloadDocuments();
+    }
+  }
+
+  async function renameDoc(target: Document, fileName: string) {
+    const updated = await run(
+      () => api.renameDocument(target.id, fileName),
+      "File renamed.",
+    );
+    if (updated) {
+      close();
+      reloadDocuments();
+    }
+  }
+
+  async function deleteDoc(target: Document) {
+    const done = await run(async () => {
+      await api.deleteDocument(target.id);
+      return true;
+    }, `Deleted “${target.fileName}”.`);
+    if (done) {
+      close();
+      if (target.id === docId) setDocId("");
+      reloadDocuments();
+    }
+  }
+
+  async function retry(target: Document) {
+    const queued = await run(
+      () => api.retryDocument(target.id),
+      "Processing again.",
+    );
+    if (queued) {
+      setDocId(target.id);
+      reloadDocuments();
+    }
+  }
+
+  function showInContext(lemma: string) {
+    setWord(lemma);
+    contextRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  const noProjects = !projects.loading && projectList.length === 0;
 
   return (
-    <main className="page">
-      <HeroSection />
-      <HealthPanel health={health} />
-      <ProjectsPanel
-        projects={projects}
-        selectedProject={selectedProject}
-        projectName={projectName}
-        onProjectNameChange={setProjectName}
-        onSelectProject={setSelectedProject}
-        onCreateProject={() => void handleCreateProject()}
-        onRefresh={() => void refreshProjects()}
-      />
-      <DocumentsPanel
-        documents={documents}
-        selectedDocument={selectedDocument}
-        selectedProjectExists={selectedProjectExists}
-        onSelectDocument={setSelectedDocument}
-        onUpload={(e) => void handleUpload(e)}
-        onRefresh={() => {
-          void refreshDocuments(selectedProject);
-          if (selectedDocument !== "")
-            void refreshPipelineJobs(selectedDocument);
+    <div className="shell">
+      <Sidebar
+        projects={projectList}
+        selectedId={projectId}
+        health={health}
+        loading={projects.loading}
+        onSelect={(id) => {
+          setProjectId(id);
+          setDocId("");
+          setWord("");
         }}
+        onCreate={() => setDialog({ kind: "create-project" })}
+        onRename={(p) => setDialog({ kind: "rename-project", project: p })}
+        onDelete={(p) => setDialog({ kind: "delete-project", project: p })}
+        onOpenGlossary={() => setDialog({ kind: "glossary" })}
       />
-      <PipelinePanel
-        pipelineJobs={pipelineJobs}
-        selectedDocument={selectedDocument}
-        streamStatusLabel={streamStatusLabel}
-        lastEventLabel={lastEventLabel}
-        isStreamStale={isStreamStale}
-        streamState={streamState}
-        onRetry={() => void handleRetry()}
+
+      <main className="main">
+        {projects.error && (
+          <div className="callout callout-bad" role="alert">
+            <strong>Can't load projects</strong>
+            <p>{projects.error}</p>
+            <button
+              type="button"
+              className="btn btn-quiet btn-sm"
+              onClick={projects.reload}
+            >
+              Try again
+            </button>
+          </div>
+        )}
+
+        {noProjects && !projects.error && (
+          <section className="welcome">
+            <h1>See how words are used.</h1>
+            <p>
+              Add a textbook, paper or report and Concordance indexes every
+              word, so you can search it and read each use in context.
+            </p>
+            <button
+              type="button"
+              className="btn btn-primary btn-lg"
+              onClick={() => setDialog({ kind: "create-project" })}
+            >
+              Create your first project
+            </button>
+            <p className="examples">
+              Ideas:{" "}
+              {EXAMPLE_PROJECT_NAMES.map((n) => (
+                <span key={n} className="chip chip-static">
+                  {n}
+                </span>
+              ))}
+            </p>
+          </section>
+        )}
+
+        {project && (
+          <>
+            <header className="page-head">
+              <div>
+                <h1>{project.name}</h1>
+                <p className="page-sub">
+                  {docList.length === 0
+                    ? "No files yet."
+                    : `${docList.length} ${docList.length === 1 ? "file" : "files"}`}
+                  {doc && (
+                    <>
+                      {" "}
+                      · exploring <strong>{doc.fileName}</strong>
+                    </>
+                  )}
+                </p>
+              </div>
+            </header>
+
+            <div className="grid">
+              <Card
+                className="span-8"
+                title="Files"
+                hint="Select a file to explore it. New files appear here while they process."
+              >
+                <LibraryCard
+                  documents={docList}
+                  selectedId={docId}
+                  loading={documents.loading}
+                  onSelect={setDocId}
+                  onRename={(d) => setDialog({ kind: "rename-doc", doc: d })}
+                  onRetry={retry}
+                  onDelete={(d) => setDialog({ kind: "delete-doc", doc: d })}
+                />
+              </Card>
+              <Card className="span-4" title="Add files">
+                <UploadCard disabled={projectId === ""} onFiles={upload} />
+              </Card>
+
+              {doc && (
+                <>
+                  {ready ? (
+                    <div className="span-12">
+                      <StatStrip stats={stats.data} />
+                    </div>
+                  ) : null}
+
+                  <Card
+                    className={ready ? "span-4" : "span-12"}
+                    title={ready ? "Processing" : `Processing ${doc.fileName}`}
+                    hint={
+                      <>
+                        Each file goes through a few{" "}
+                        <Term k="pipeline">steps</Term> first. Large books take
+                        a minute or two.
+                      </>
+                    }
+                  >
+                    <StepsCard
+                      doc={doc}
+                      jobs={jobs.data ?? []}
+                      stream={streamState}
+                    />
+                  </Card>
+
+                  {ready && (
+                    <>
+                      <Card
+                        className="span-8"
+                        title="Most used words"
+                        hint="The words that carry the topic of this file."
+                      >
+                        <TopWordsCard
+                          documentId={doc.id}
+                          ready={ready}
+                          onPick={showInContext}
+                        />
+                      </Card>
+
+                      <Card
+                        className="span-5"
+                        title={<Term k="concordance">Word list</Term>}
+                        hint="Every word in the file and how often it appears."
+                      >
+                        <WordListCard
+                          documentId={doc.id}
+                          ready={ready}
+                          selectedWord={word}
+                          onPick={showInContext}
+                        />
+                      </Card>
+
+                      <div className="span-7 anchor" ref={contextRef}>
+                        <Card
+                          className="card-fill"
+                          title="In context"
+                          hint="Read each use of a word with the text around it."
+                        >
+                          <KwicCard
+                            projectId={projectId}
+                            fileCount={readyDocs.length}
+                            documentId={doc.id}
+                            ready={ready}
+                            word={word}
+                            onWordChange={setWord}
+                          />
+                        </Card>
+                      </div>
+
+                      <Card
+                        className="span-12"
+                        title={
+                          <Term k="keyness">Compare with another file</Term>
+                        }
+                        hint="Find the words that set this file apart from another one in the project."
+                      >
+                        <CompareCard
+                          doc={doc}
+                          others={readyDocs.filter((d) => d.id !== doc.id)}
+                          onPick={showInContext}
+                        />
+                      </Card>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          </>
+        )}
+      </main>
+
+      <TextDialog
+        open={dialog.kind === "create-project"}
+        title="New project"
+        label="Project name"
+        placeholder="e.g. Linguistics 101"
+        examples={EXAMPLE_PROJECT_NAMES}
+        submitLabel="Create project"
+        onSubmit={createProject}
+        onClose={close}
       />
-      <ConcordancePanel
-        concordanceTerms={concordanceTerms}
-        concordanceLemma={concordanceLemma}
-        concordancePOS={concordancePOS}
-        selectedDocument={selectedDocument}
-        onLemmaChange={setConcordanceLemma}
-        onPOSChange={setConcordancePOS}
-        onApplyFilters={() => void refreshConcordanceNow()}
+      <TextDialog
+        open={dialog.kind === "rename-project"}
+        title="Rename project"
+        label="Project name"
+        initial={dialog.kind === "rename-project" ? dialog.project.name : ""}
+        submitLabel="Save name"
+        onSubmit={(name) =>
+          dialog.kind === "rename-project"
+            ? renameProject(dialog.project, name)
+            : undefined
+        }
+        onClose={close}
       />
-      <KWICPanel
-        selectedDocument={selectedDocument}
-        kwicRows={kwicRows}
-        kwicTotal={kwicTotal}
-        kwicOffset={kwicOffset}
-        kwicLemma={kwicLemma}
-        kwicLimit={kwicLimit}
-        kwicSort={kwicSort}
-        kwicDir={kwicDir}
-        onLemmaChange={setKWICLemma}
-        onLimitChange={setKWICLimit}
-        onSortChange={setKWICSort}
-        onDirChange={setKWICDir}
-        onQuery={(offset) => void refreshKWICNow(offset)}
+      <TextDialog
+        open={dialog.kind === "rename-doc"}
+        title="Rename file"
+        label="File name"
+        initial={dialog.kind === "rename-doc" ? dialog.doc.fileName : ""}
+        submitLabel="Save name"
+        onSubmit={(name) =>
+          dialog.kind === "rename-doc" ? renameDoc(dialog.doc, name) : undefined
+        }
+        onClose={close}
       />
-      <StatusBar message={statusMessage} />
-    </main>
+      <ConfirmDialog
+        open={dialog.kind === "delete-project"}
+        title="Delete this project?"
+        body={
+          <p>
+            “{dialog.kind === "delete-project" ? dialog.project.name : ""}” and
+            all of its files and analysis will be removed. This can't be undone.
+          </p>
+        }
+        confirmLabel="Delete project"
+        onConfirm={() =>
+          dialog.kind === "delete-project"
+            ? deleteProject(dialog.project)
+            : undefined
+        }
+        onClose={close}
+      />
+      <ConfirmDialog
+        open={dialog.kind === "delete-doc"}
+        title="Delete this file?"
+        body={
+          <p>
+            “{dialog.kind === "delete-doc" ? dialog.doc.fileName : ""}” and its
+            analysis will be removed. This can't be undone.
+          </p>
+        }
+        confirmLabel="Delete file"
+        onConfirm={() =>
+          dialog.kind === "delete-doc" ? deleteDoc(dialog.doc) : undefined
+        }
+        onClose={close}
+      />
+      <GlossaryPanel open={dialog.kind === "glossary"} onClose={close} />
+    </div>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <ToastProvider>
+      <Dashboard />
+    </ToastProvider>
   );
 }

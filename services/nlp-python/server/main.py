@@ -1,10 +1,10 @@
 import os
-import re
 from concurrent import futures
 
 import grpc
 
 import nlp_pb2
+from analyzer import load_analyzer
 
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
@@ -13,15 +13,17 @@ PIPELINE_VERSION = os.getenv("PIPELINE_VERSION", "v0")
 
 MAX_MESSAGE_BYTES = 256 * 1024 * 1024
 
-WORD_OR_PUNCT_PATTERN = re.compile(r"\w+|[^\w\s]", re.UNICODE)
-
 
 class NLPService:
+    def __init__(self, analyzer):
+        self._analyzer = analyzer
+        self._version = f"{PIPELINE_VERSION}+{analyzer.name}"
+
     def Health(self, _request, _context):
         return nlp_pb2.HealthResponse(
             service="nlp-python",
             status="ready",
-            pipeline_version=PIPELINE_VERSION,
+            pipeline_version=self._version,
             embedding_model=EMBEDDING_MODEL,
             embedding_dim=EMBEDDING_DIM,
         )
@@ -34,36 +36,34 @@ class NLPService:
         default_language = request.language_hint.strip() if request.language_hint else "unknown"
         confidence = 0.9 if default_language != "unknown" else 0.5
 
-        for passage in request.passages:
-            for sentence in passage.sentences:
-                sentence_languages.append(
-                    nlp_pb2.SentenceLanguage(
+        sentences = [sentence for passage in request.passages for sentence in passage.sentences]
+        analyzed = self._analyzer.analyze([sentence.text for sentence in sentences])
+
+        for sentence, sentence_tokens in zip(sentences, analyzed):
+            sentence_languages.append(
+                nlp_pb2.SentenceLanguage(
+                    sentence_id=sentence.sentence_id,
+                    language=default_language,
+                    confidence=confidence,
+                )
+            )
+            for token_index, tok in enumerate(sentence_tokens):
+                tokens.append(
+                    nlp_pb2.Token(
                         sentence_id=sentence.sentence_id,
-                        language=default_language,
-                        confidence=confidence,
+                        token_index=token_index,
+                        surface=tok.surface,
+                        lemma=tok.lemma,
+                        pos=tok.pos,
+                        is_stopword=tok.is_stop or tok.lemma in stopwords,
+                        is_punct=tok.is_punct,
+                        start_char=sentence.start_char + tok.start,
+                        end_char=sentence.start_char + tok.end,
                     )
                 )
 
-                for token_index, match in enumerate(WORD_OR_PUNCT_PATTERN.finditer(sentence.text)):
-                    surface = match.group(0)
-                    lemma = surface.lower()
-                    is_punct = not any(char.isalnum() for char in surface)
-                    tokens.append(
-                        nlp_pb2.Token(
-                            sentence_id=sentence.sentence_id,
-                            token_index=token_index,
-                            surface=surface,
-                            lemma=lemma,
-                            pos="PUNCT" if is_punct else "X",
-                            is_stopword=(lemma in stopwords),
-                            is_punct=is_punct,
-                            start_char=sentence.start_char + match.start(),
-                            end_char=sentence.start_char + match.end(),
-                        )
-                    )
-
         return nlp_pb2.AnalyzeDocumentResponse(
-            pipeline_version=PIPELINE_VERSION,
+            pipeline_version=self._version,
             sentence_languages=sentence_languages,
             tokens=tokens,
             mentions=[],
@@ -93,7 +93,7 @@ def _unary_unary(handler_method, request_type, response_type):
 
 def main():
     port = int(os.getenv("NLP_GRPC_PORT", "50051"))
-    service = NLPService()
+    service = NLPService(load_analyzer())
     grpc_server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=4),
         options=[

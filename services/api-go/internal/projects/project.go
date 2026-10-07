@@ -10,6 +10,11 @@ type Project struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
+type UpdateProjectInput struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
 type CreateProjectInput struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`

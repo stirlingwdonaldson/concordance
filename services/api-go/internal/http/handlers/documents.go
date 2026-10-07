@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -139,34 +141,104 @@ func (h DocumentsHandler) ListPipelineJobs(w http.ResponseWriter, r *http.Reques
 
 func (h DocumentsHandler) ListConcordance(w http.ResponseWriter, r *http.Request) {
 	documentID := r.PathValue("documentId")
-	items, err := h.store.ListConcordance(r.Context(), documentID, documents.ConcordanceFilter{
-		Lemma:   strings.TrimSpace(r.URL.Query().Get("lemma")),
-		POS:     strings.TrimSpace(r.URL.Query().Get("pos")),
-		Section: strings.TrimSpace(r.URL.Query().Get("section")),
-	})
+	query := r.URL.Query()
+	limit := parseIntWithDefault(query.Get("limit"), 50)
+	if limit < 1 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	offset := max(parseIntWithDefault(query.Get("offset"), 0), 0)
+
+	filter := documents.ConcordanceFilter{
+		Lemma:   strings.TrimSpace(query.Get("lemma")),
+		POS:     strings.TrimSpace(query.Get("pos")),
+		Section: strings.TrimSpace(query.Get("section")),
+		Limit:   limit,
+		Offset:  offset,
+		SortBy:  strings.TrimSpace(query.Get("sort")),
+		SortDir: strings.TrimSpace(query.Get("dir")),
+	}
+
+	total, err := h.store.CountConcordance(r.Context(), documentID, filter)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to count concordance"})
+		return
+	}
+
+	items, err := h.store.ListConcordance(r.Context(), documentID, filter)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to list concordance"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
+}
+
+func (h DocumentsHandler) GetDocumentStats(w http.ResponseWriter, r *http.Request) {
+	documentID := r.PathValue("documentId")
+	if _, ok := h.store.Get(r.Context(), documentID); !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "document not found"})
+		return
+	}
+
+	stats, err := h.store.Stats(r.Context(), documentID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to load document stats"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, stats)
+}
+
+func (h DocumentsHandler) RenameDocument(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		FileName string `json:"fileName"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json payload"})
+		return
+	}
+
+	doc, ok, err := h.store.Rename(r.Context(), r.PathValue("documentId"), input.FileName)
+	if errors.Is(err, documents.ErrInvalidFileName) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to rename document"})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "document not found"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, doc)
+}
+
+func (h DocumentsHandler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
+	doc, ok, err := h.store.Delete(r.Context(), r.PathValue("documentId"))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to delete document"})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "document not found"})
+		return
+	}
+
+	if doc.LocalPath != "" {
+		_ = os.Remove(doc.LocalPath)
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h DocumentsHandler) ListKWIC(w http.ResponseWriter, r *http.Request) {
 	documentID := r.PathValue("documentId")
-	limit := parseIntWithDefault(r.URL.Query().Get("limit"), 50)
-	offset := parseIntWithDefault(r.URL.Query().Get("offset"), 0)
-	limit, offset = normalizeKWICPage(limit, offset)
-
-	filter := documents.KWICFilter{
-		Lemma:   strings.TrimSpace(r.URL.Query().Get("lemma")),
-		Page:    strings.TrimSpace(r.URL.Query().Get("page")),
-		Section: strings.TrimSpace(r.URL.Query().Get("section")),
-		Limit:   limit,
-		Offset:  offset,
-		SortBy:  normalizeKWICSortBy(r.URL.Query().Get("sort")),
-		SortDir: normalizeSortDir(r.URL.Query().Get("dir")),
-	}
+	filter := kwicFilterFromQuery(r)
 
 	total, err := h.store.CountKWIC(r.Context(), documentID, filter)
 	if err != nil {
@@ -183,8 +255,8 @@ func (h DocumentsHandler) ListKWIC(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":  items,
 		"total":  total,
-		"limit":  limit,
-		"offset": offset,
+		"limit":  filter.Limit,
+		"offset": filter.Offset,
 		"sort":   filter.SortBy,
 		"dir":    filter.SortDir,
 	})
