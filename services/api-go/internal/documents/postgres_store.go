@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -13,6 +14,8 @@ import (
 	"concordance/services/api-go/internal/nlpv1"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -93,10 +96,49 @@ returning id, project_id, source_path, source_hash, format, title, ingest_status
 		&doc.UpdatedAt,
 	)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return s.resolveDuplicate(ctx, input)
+		}
+
 		return Document{}, err
 	}
 
 	return doc, nil
+}
+
+// resolveDuplicate handles re-uploading a file that already exists in the same
+// project. A document that previously failed is reset and re-queued so the
+// upload acts as a retry; anything else is returned as-is without reprocessing.
+func (s *PostgresStore) resolveDuplicate(ctx context.Context, input CreateInput) (Document, error) {
+	var existingID string
+	if err := s.pool.QueryRow(
+		ctx,
+		`select id from documents where project_id = $1 and source_hash = $2`,
+		input.ProjectID,
+		input.SourceHash,
+	).Scan(&existingID); err != nil {
+		return Document{}, err
+	}
+
+	existing, ok := s.Get(ctx, existingID)
+	if !ok {
+		return Document{}, fmt.Errorf("existing document %s not found", existingID)
+	}
+
+	if existing.Status != "failed" {
+		return existing, nil
+	}
+
+	retried, found, err := s.Retry(ctx, existingID)
+	if err != nil {
+		return Document{}, err
+	}
+	if !found {
+		return Document{}, fmt.Errorf("existing document %s not found", existingID)
+	}
+
+	return retried, nil
 }
 
 func (s *PostgresStore) Get(ctx context.Context, documentID string) (Document, bool) {
@@ -509,10 +551,24 @@ func (s *PostgresStore) RunPipeline(ctx context.Context, documentID string) {
 
 	s.publishDocumentStatus(document.ID, document.ProjectID, document.Status, document.Progress, "")
 
-	if err := s.runIngestionPipeline(ctx, document); err != nil {
+	err := s.runPipelineSafely(ctx, document)
+	if err != nil {
+		log.Printf("pipeline failed for document %s: %v", documentID, err)
 		s.markFailed(context.Background(), documentID, err.Error())
 		s.publishDocumentStatus(document.ID, document.ProjectID, "failed", document.Progress, err.Error())
 	}
+}
+
+// runPipelineSafely converts a panic anywhere in the pipeline into an ordinary
+// error so one bad document can never crash the API process.
+func (s *PostgresStore) runPipelineSafely(ctx context.Context, document Document) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("internal error while processing document: %v", recovered)
+		}
+	}()
+
+	return s.runIngestionPipeline(ctx, document)
 }
 
 func (s *PostgresStore) runIngestionPipeline(ctx context.Context, document Document) error {
@@ -614,6 +670,28 @@ func (s *PostgresStore) persistStructure(ctx context.Context, documentID, rawTex
 
 	passages := splitParagraphs(normalized)
 
+	documentUUID, err := parsePGUUID(documentID)
+	if err != nil {
+		return err
+	}
+
+	passageRows := make([][]any, 0, len(passages))
+	sentenceRows := make([][]any, 0, len(passages))
+	for idx, passage := range passages {
+		passageID := uuid.New()
+		sentences := splitSentences(passage)
+
+		passageRows = append(passageRows, []any{
+			pgUUID(passageID), documentUUID, int32(idx), passage.Text, passage.StartChar, passage.EndChar, int32(len(sentences)),
+		})
+
+		for sentenceIndex, sentence := range sentences {
+			sentenceRows = append(sentenceRows, []any{
+				pgUUID(uuid.New()), pgUUID(passageID), int32(sentenceIndex), sentence.Text, sentence.StartChar, sentence.EndChar,
+			})
+		}
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -631,28 +709,38 @@ where passage_id in (select id from passages where document_id = $1)
 		return err
 	}
 
-	for idx, passage := range passages {
-		passageID := uuid.New().String()
-		sentences := splitSentences(passage)
+	if _, err := tx.CopyFrom(
+		ctx,
+		pgx.Identifier{"passages"},
+		[]string{"id", "document_id", "passage_index", "text", "start_char", "end_char", "sentence_count"},
+		pgx.CopyFromRows(passageRows),
+	); err != nil {
+		return fmt.Errorf("store passages: %w", err)
+	}
 
-		if _, err := tx.Exec(ctx, `
-insert into passages (id, document_id, passage_index, text, start_char, end_char, sentence_count)
-values ($1, $2, $3, $4, $5, $6, $7)
-`, passageID, documentID, idx, passage.Text, passage.StartChar, passage.EndChar, len(sentences)); err != nil {
-			return err
-		}
-
-		for sentenceIndex, sentence := range sentences {
-			if _, err := tx.Exec(ctx, `
-insert into sentences (id, passage_id, sentence_index, text, start_char, end_char)
-values ($1, $2, $3, $4, $5, $6)
-`, uuid.New().String(), passageID, sentenceIndex, sentence.Text, sentence.StartChar, sentence.EndChar); err != nil {
-				return err
-			}
-		}
+	if _, err := tx.CopyFrom(
+		ctx,
+		pgx.Identifier{"sentences"},
+		[]string{"id", "passage_id", "sentence_index", "text", "start_char", "end_char"},
+		pgx.CopyFromRows(sentenceRows),
+	); err != nil {
+		return fmt.Errorf("store sentences: %w", err)
 	}
 
 	return tx.Commit(ctx)
+}
+
+func pgUUID(id uuid.UUID) pgtype.UUID {
+	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
+func parsePGUUID(raw string) (pgtype.UUID, error) {
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("invalid uuid %q: %w", raw, err)
+	}
+
+	return pgUUID(id), nil
 }
 
 type nlpSentenceRow struct {
@@ -673,41 +761,35 @@ func (s *PostgresStore) analyzeDocument(ctx context.Context, document Document) 
 		return err
 	}
 
-	request := &nlpv1.AnalyzeDocumentRequest{
-		ProjectId:    document.ProjectID,
-		DocumentId:   document.ID,
-		LanguageHint: "en",
-		Passages:     make([]*nlpv1.PassageInput, 0),
-	}
+	batches := buildAnalyzeBatches(sentenceRows, maxBatchChars, maxBatchSentences)
 
-	passageInputs := make(map[string]*nlpv1.PassageInput)
-	passageOrder := make([]string, 0)
-	for _, row := range sentenceRows {
-		passageInput, ok := passageInputs[row.PassageID]
-		if !ok {
-			passageInput = &nlpv1.PassageInput{PassageId: row.PassageID, Sentences: make([]*nlpv1.SentenceInput, 0)}
-			passageInputs[row.PassageID] = passageInput
-			passageOrder = append(passageOrder, row.PassageID)
-		}
-
-		passageInput.Sentences = append(passageInput.Sentences, &nlpv1.SentenceInput{
-			SentenceId: row.ID,
-			Text:       row.Text,
-			StartChar:  row.StartChar,
-			EndChar:    row.EndChar,
-		})
-	}
-
-	for _, passageID := range passageOrder {
-		request.Passages = append(request.Passages, passageInputs[passageID])
-	}
-
-	response, err := s.nlp.AnalyzeDocument(ctx, request)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback(ctx)
 
-	return s.persistTokens(ctx, document.ID, response.Tokens)
+	if _, err := tx.Exec(ctx, `delete from tokens where document_id = $1`, document.ID); err != nil {
+		return err
+	}
+
+	for i, batch := range batches {
+		response, err := s.nlp.AnalyzeDocument(ctx, &nlpv1.AnalyzeDocumentRequest{
+			ProjectId:    document.ProjectID,
+			DocumentId:   document.ID,
+			LanguageHint: "en",
+			Passages:     batch,
+		})
+		if err != nil {
+			return fmt.Errorf("analyze batch %d of %d: %w", i+1, len(batches), err)
+		}
+
+		if err := copyTokens(ctx, tx, document.ID, response.GetTokens()); err != nil {
+			return fmt.Errorf("store tokens for batch %d of %d: %w", i+1, len(batches), err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (s *PostgresStore) loadDocumentSentences(ctx context.Context, documentID string) ([]nlpSentenceRow, error) {
@@ -742,42 +824,45 @@ order by passages.passage_index asc, sentences.sentence_index asc
 	return items, nil
 }
 
-func (s *PostgresStore) persistTokens(ctx context.Context, documentID string, tokens []*nlpv1.Token) error {
-	tx, err := s.pool.Begin(ctx)
+func copyTokens(ctx context.Context, tx pgx.Tx, documentID string, tokens []*nlpv1.Token) error {
+	documentUUID, err := parsePGUUID(documentID)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, `delete from tokens where document_id = $1`, documentID); err != nil {
-		return err
-	}
-
+	rows := make([][]any, 0, len(tokens))
 	for _, token := range tokens {
 		if token.GetSentenceId() == "" {
 			continue
 		}
 
-		if _, err := tx.Exec(ctx, `
-insert into tokens (
-  document_id,
-  sentence_id,
-  token_index,
-  surface,
-  lemma,
-  pos,
-  is_stopword,
-  is_punct,
-  start_char,
-  end_char
-)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-`, documentID, token.GetSentenceId(), token.GetTokenIndex(), token.GetSurface(), token.GetLemma(), token.GetPos(), token.GetIsStopword(), token.GetIsPunct(), token.GetStartChar(), token.GetEndChar()); err != nil {
+		sentenceUUID, err := parsePGUUID(token.GetSentenceId())
+		if err != nil {
 			return err
 		}
+
+		rows = append(rows, []any{
+			documentUUID,
+			sentenceUUID,
+			token.GetTokenIndex(),
+			token.GetSurface(),
+			token.GetLemma(),
+			token.GetPos(),
+			token.GetIsStopword(),
+			token.GetIsPunct(),
+			token.GetStartChar(),
+			token.GetEndChar(),
+		})
 	}
 
-	return tx.Commit(ctx)
+	_, err = tx.CopyFrom(
+		ctx,
+		pgx.Identifier{"tokens"},
+		[]string{"document_id", "sentence_id", "token_index", "surface", "lemma", "pos", "is_stopword", "is_punct", "start_char", "end_char"},
+		pgx.CopyFromRows(rows),
+	)
+
+	return err
 }
 
 func (s *PostgresStore) aggregateConcordance(ctx context.Context, documentID string) error {

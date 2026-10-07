@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -46,6 +47,7 @@ func (h DocumentsHandler) UploadDocument(w http.ResponseWriter, r *http.Request)
 
 	localPath, sourceHash, err := saveUploadFile(h.uploadDir, header.Filename, file)
 	if err != nil {
+		log.Printf("upload: save failed for %q: %v", header.Filename, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to save upload"})
 		return
 	}
@@ -58,11 +60,23 @@ func (h DocumentsHandler) UploadDocument(w http.ResponseWriter, r *http.Request)
 		Format:     detectFormat(header.Filename),
 	})
 	if err != nil {
+		log.Printf("upload: register failed for %q in project %s: %v", header.Filename, projectID, err)
+		_ = os.Remove(localPath)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to register document"})
 		return
 	}
 
-	go h.store.RunPipeline(context.Background(), doc.ID)
+	// A duplicate upload resolves to the existing document, so the copy we just
+	// saved is redundant.
+	if doc.LocalPath != localPath {
+		_ = os.Remove(localPath)
+	}
+
+	// Only start processing for newly queued documents; an already-processed
+	// duplicate is returned as-is.
+	if doc.Status == "queued" {
+		go h.store.RunPipeline(context.Background(), doc.ID)
+	}
 
 	writeJSON(w, http.StatusAccepted, doc)
 }

@@ -11,6 +11,8 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "384"))
 PIPELINE_VERSION = os.getenv("PIPELINE_VERSION", "v0")
 
+MAX_MESSAGE_BYTES = 256 * 1024 * 1024
+
 WORD_OR_PUNCT_PATTERN = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 
 
@@ -92,7 +94,13 @@ def _unary_unary(handler_method, request_type, response_type):
 def main():
     port = int(os.getenv("NLP_GRPC_PORT", "50051"))
     service = NLPService()
-    grpc_server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
+    grpc_server = grpc.server(
+        futures.ThreadPoolExecutor(max_workers=4),
+        options=[
+            ("grpc.max_receive_message_length", MAX_MESSAGE_BYTES),
+            ("grpc.max_send_message_length", MAX_MESSAGE_BYTES),
+        ],
+    )
     grpc_server.add_generic_rpc_handlers(
         (
             grpc.method_handlers_generic_handler(

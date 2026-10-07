@@ -13,6 +13,14 @@ import (
 const (
 	healthMethod          = "/concordance.nlp.v1.NLPService/Health"
 	analyzeDocumentMethod = "/concordance.nlp.v1.NLPService/AnalyzeDocument"
+
+	// MaxMessageBytes is the gRPC message size limit used on both sides of the
+	// sidecar connection. The gRPC default of 4 MiB is far too small for tokenized
+	// output of real documents.
+	MaxMessageBytes = 256 * 1024 * 1024
+
+	healthTimeout  = 10 * time.Second
+	analyzeTimeout = 5 * time.Minute
 )
 
 type GRPCClient struct {
@@ -27,6 +35,10 @@ func NewGRPCClient(ctx context.Context, addr string) (*GRPCClient, error) {
 		dialCtx,
 		addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(MaxMessageBytes),
+			grpc.MaxCallSendMsgSize(MaxMessageBytes),
+		),
 		grpc.WithBlock(),
 	)
 	if err != nil {
@@ -38,7 +50,7 @@ func NewGRPCClient(ctx context.Context, addr string) (*GRPCClient, error) {
 
 func (c *GRPCClient) Health(ctx context.Context) (*nlpv1.HealthResponse, error) {
 	resp := &nlpv1.HealthResponse{}
-	if err := c.invoke(ctx, healthMethod, &nlpv1.HealthRequest{}, resp); err != nil {
+	if err := c.invoke(ctx, healthMethod, healthTimeout, &nlpv1.HealthRequest{}, resp); err != nil {
 		return nil, err
 	}
 
@@ -47,7 +59,7 @@ func (c *GRPCClient) Health(ctx context.Context) (*nlpv1.HealthResponse, error) 
 
 func (c *GRPCClient) AnalyzeDocument(ctx context.Context, req *nlpv1.AnalyzeDocumentRequest) (*nlpv1.AnalyzeDocumentResponse, error) {
 	resp := &nlpv1.AnalyzeDocumentResponse{}
-	if err := c.invoke(ctx, analyzeDocumentMethod, req, resp); err != nil {
+	if err := c.invoke(ctx, analyzeDocumentMethod, analyzeTimeout, req, resp); err != nil {
 		return nil, err
 	}
 
@@ -62,8 +74,8 @@ func (c *GRPCClient) Close() error {
 	return c.conn.Close()
 }
 
-func (c *GRPCClient) invoke(ctx context.Context, method string, req, resp proto.Message) error {
-	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+func (c *GRPCClient) invoke(ctx context.Context, method string, timeout time.Duration, req, resp proto.Message) error {
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	return c.conn.Invoke(callCtx, method, req, resp)
